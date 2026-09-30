@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 from numpy import array, zeros
 from numpy.linalg import norm
 
+# Comentado con Copilot
 # Modelo físico: oscilador armónico simple.
 # La variable de estado es U = [x, v], donde:
 #   x = posición
