@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from numpy import array, zeros
-
+# Comentado con Copilot
 # Modelo físico: oscilador armónico simple sin amortiguamiento.
 # La variable U = [x, v] representa posición x y velocidad v.
 # La ecuación del sistema es:
