@@ -1,8 +1,13 @@
-#ejemplo del uso de los esquemas de integración temporal para el oscilador armónico simple
-#se calculan los errores del EI y RK4 con respecto al EE, que es el esquema más simple y rápido, pero menos preciso.
+'''
+ejemplo del uso de los esquemas de integración temporal y funcion de ingegrador de Cauchy
+ para el oscilador armónico simple
+se calculan los errores del EI y RK4 con respecto al EE, 
+que es el esquema más simple y rápido, pero menos preciso.
+'''
 import matplotlib.pyplot as plt
 from numpy import array, zeros, abs
 from Esquemas_temporales import EE, RK4,EI, CN
+from Milestone_2.Integradores import integrar_Cauchy
 
 def F(U:array, t:float):
     # Derivada del estado U = [x, v]
@@ -18,11 +23,12 @@ U_3 = zeros((N + 1, Nv))
 U_3[0, :] = array([1, 0])
 U_4 = zeros((N + 1, Nv))
 U_4[0, :] = array([1, 0])
-for n in range(0, N):
-    U_1[n + 1, :] =EE(U_1[n, :], At, n*At, F)
-    U_2[n + 1, :] =RK4(U_2[n, :], At, n*At, F)
-    U_3[n + 1, :] =EI(U_3[n, :], At, n*At, F)
-    U_4[n + 1, :] =CN(U_4[n, :], At, n*At, F)
+
+U_1 = integrar_Cauchy("EE", array([1, 0]), At, N, F)
+U_2 = integrar_Cauchy("RK4", array([1, 0]), At, N, F)
+U_3 = integrar_Cauchy("EI", array([1, 0]), At, N, F)
+U_4 = integrar_Cauchy("CN", array([1, 0]), At, N, F)
+
 ERR_RK4 = abs(U_1 - U_2)
 ERR_EI = abs(U_1 - U_3)
 ERR_CN = abs(U_1 - U_4)
