@@ -7,7 +7,7 @@ que es el esquema más simple y rápido, pero menos preciso.
 import matplotlib.pyplot as plt
 from numpy import array, zeros, abs
 from Esquemas_temporales import EE, RK4,EI, CN
-from Milestone_2.Integradores import integrar_Cauchy
+from Integradores import integrar_Cauchy
 
 def F(U:array, t:float):
     # Derivada del estado U = [x, v]
@@ -24,10 +24,10 @@ U_3[0, :] = array([1, 0])
 U_4 = zeros((N + 1, Nv))
 U_4[0, :] = array([1, 0])
 
-U_1 = integrar_Cauchy("EE", array([1, 0]), At, N, F)
-U_2 = integrar_Cauchy("RK4", array([1, 0]), At, N, F)
-U_3 = integrar_Cauchy("EI", array([1, 0]), At, N, F)
-U_4 = integrar_Cauchy("CN", array([1, 0]), At, N, F)
+U_1 = integrar_Cauchy("EE", U_1[0, :] , At, N, F)
+U_2 = integrar_Cauchy("RK4", U_2[0, :] , At, N, F)
+U_3 = integrar_Cauchy("EI", U_3[0, :] , At, N, F)
+U_4 = integrar_Cauchy("CN", U_4[0, :] , At, N, F)
 
 ERR_RK4 = abs(U_1 - U_2)
 ERR_EI = abs(U_1 - U_3)
