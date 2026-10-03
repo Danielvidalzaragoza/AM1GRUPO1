@@ -1,4 +1,4 @@
-f#Modelo Físico
+#Modelo Físico
 import numpy as np
 from numpy import array, zeros
 from numpy.linalg import norm
