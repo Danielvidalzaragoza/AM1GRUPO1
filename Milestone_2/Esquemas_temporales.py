@@ -1,11 +1,15 @@
-#Modelo Físico
+'''Esquemas temporales para la integración de ecuaciones diferenciales ordinarias (EDO)
+    -Euler Explícito- EE
+    -Euler Implícito- EI
+    -Crank-Nicolson- CN
+    -Runge-Kutta de 4to orden- RK4
+'''
 import numpy as np
 from numpy import array, zeros
 from numpy.linalg import norm
 from typing import Callable
 
 def EE(U:array ,At:float,t:float, F:Callable[[array,float], array]):
-	
 	return U+ At * F(U,t)
 
 def EI(U:array, At:float, t:float, F:Callable[[array,float], array]):
@@ -15,7 +19,6 @@ def EI(U:array, At:float, t:float, F:Callable[[array,float], array]):
       R = Y - U - At * F(Y,t+At)
       Y = Y - R
    return Y
-
 
 def CN(U:array, At:float, t:float, F:Callable[[array,float], array]):
     # Método de Crank-Nicolson de un solo paso: U(t+At) = U(t) + At/2 * {F(U(t), t) + F(U(t+At), t+At)}.
@@ -30,5 +33,5 @@ def RK4(U:array, At:float, t:float, F:Callable[[array,float], array]):
     k1 = F(U,t)
     k2 = F(U, t + At * k1 / 2)
     k3 = F(U, t + At * k2 / 2)
-    k4 = F(U, t + At * k3)   
+    k4 = F(U, t + At * k3)
     return U + At * (k1 + 2 * k2 + 2 * k3 + k4) / 6
