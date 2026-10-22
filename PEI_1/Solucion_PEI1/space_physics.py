@@ -54,12 +54,14 @@ def estabilidad_ejes(I1, I2, I3, omega=1):
 
 
 def separatriz(I1, I2, I3, energia, puntos=160):
+    # Elipse completa en el plano w3 = pendiente * w1 (L^2 = 2 I2 T); la otra
+    # rama es su simetrica respecto a w3 = 0.
     pendiente = np.sqrt(I1 * (I2 - I1) / (I3 * (I3 - I2)))
-    w1_max = np.sqrt(energia / (I1 + I2 * pendiente**2))
-    w1 = np.linspace(-w1_max, w1_max, puntos)
-    w3 = pendiente * w1
-    w2 = np.sqrt((2 * energia - I1 * w1**2 - I3 * w3**2) / I2)
-    return np.column_stack((w1, w2, w3))
+    w1_max = np.sqrt(2 * energia / (I1 + I3 * pendiente**2))
+    w2_max = np.sqrt(2 * energia / I2)
+    phi = np.linspace(0, 2 * np.pi, puntos)
+    w1 = w1_max * np.cos(phi)
+    return np.column_stack((w1, w2_max * np.sin(phi), pendiente * w1))
 
 
 def paso_actitud(R, W, W_nuevo, dt):

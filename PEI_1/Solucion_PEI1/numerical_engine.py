@@ -39,10 +39,14 @@ def LF(U, At, t, F, U_prev):
     return U_prev + 2 * At * F(U, t)
 
 
-def My_Newton(U, At, t, F, J, tol=1e-10):
+def My_Newton(U, At, t, F, J, tol=1e-10, max_iter=50):
     Y = U + At * F(U, t)
     R = Y - U - At * F(Y, t + At)
+    iteraciones = 0
     while norm(R) > tol:
+        iteraciones += 1
+        if iteraciones > max_iter:
+            raise RuntimeError(f"Newton no convergio en {max_iter} iteraciones.")
         matrix = np.eye(len(U)) - At * J(Y, t + At)
         Y = Y - np.linalg.solve(matrix, R)
         R = Y - U - At * F(Y, t + At)

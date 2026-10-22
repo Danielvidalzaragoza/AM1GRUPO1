@@ -1,5 +1,5 @@
 import space_physics,numerical_engine
-#imputs:
+#inputs:
 I_1=0.014
 I_2=0.014
 I_3=0.028

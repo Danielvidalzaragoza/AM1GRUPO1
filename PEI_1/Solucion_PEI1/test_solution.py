@@ -5,6 +5,8 @@ import numpy as np
 
 matplotlib.use("Agg")
 
+from .cuerpos import CATALOGO
+from .gui_actitud import ESQUEMAS, PanelActitud, _cotas_polhodia
 from .gui_reactive import RotationDashboard
 from .numerical_engine import integrar_Cauchy, richardson_error, stability_report
 from .space_physics import (
@@ -120,6 +122,61 @@ class PruebasPEI1(unittest.TestCase):
         self.assertEqual(
             dashboard.boton_simulacion.label.get_text(), "Reiniciar simulacion"
         )
+
+    def test_catalogo_de_cuerpos(self):
+        for cuerpo in CATALOGO:
+            with self.subTest(cuerpo=cuerpo.nombre):
+                I = cuerpo.inercia
+                # Ejes del cuerpo = ejes principales, ordenados I1 < I2 < I3.
+                self.assertTrue(np.allclose(I, np.diag(np.diag(I)), atol=1e-12))
+                I1, I2, I3 = cuerpo.momentos
+                self.assertTrue(I1 < I2 < I3)
+                self.assertLessEqual(I3, I1 + I2 + 1e-12)
+                caras, normales, realizable = cuerpo.deformar(
+                    *cuerpo.inercias_tipicas()
+                )
+                self.assertTrue(realizable)
+                self.assertTrue(np.allclose(caras, cuerpo.caras))
+                self.assertEqual(normales.shape, (len(caras), 3))
+                self.assertFalse(cuerpo.deformar(0.5, 0.6, 2.0)[2])
+
+    def test_cotas_de_la_polhodia(self):
+        W0 = np.array([0.05, 2.0, -0.1])
+        t, U = integrar_Cauchy("RK4", W0, 2000, 0, 20, self.F, self.J)
+        energia, momento = invariantes(W0, self.I1, self.I2, self.I3)
+        cotas = _cotas_polhodia(
+            np.array([self.I1, self.I2, self.I3]), energia, momento
+        )
+        self.assertTrue(np.all(np.abs(U).max(axis=0) <= cotas * (1 + 1e-6)))
+        self.assertTrue(np.all(np.abs(U).max(axis=0) >= 0.95 * cotas))
+
+    def test_panel_actitud_voltea_solo_en_el_eje_intermedio(self):
+        panel = PanelActitud()
+        panel.sliders["tf"].set_val(15.0)
+        volteos = []
+        for eje in range(3):
+            panel.radio_eje.set_active(eje)
+            self.assertEqual(panel.n, 0)
+            while panel.n < panel.N:
+                self.assertTrue(panel._avanzar())
+            R = panel.R
+            self.assertTrue(np.allclose(R @ R.T, np.eye(3)))
+            volteos.append(panel.volteos)
+        self.assertEqual(volteos[0], 0)
+        self.assertGreaterEqual(volteos[1], 2)
+        self.assertEqual(volteos[2], 0)
+
+        panel.radio_cuerpo.set_active(2)
+        self.assertIs(panel.cuerpo, CATALOGO[2])
+        self.assertTrue(np.allclose(panel.I, CATALOGO[2].inercias_tipicas()))
+        panel.sliders["tf"].set_val(1.0)
+        for indice in range(len(ESQUEMAS)):
+            panel.radio_esquema.set_active(indice)
+            for _ in range(10):
+                self.assertTrue(panel._avanzar())
+            panel._dibujar()
+        panel.calcular_richardson()
+        self.assertIn("orden p", panel.texto_richardson.get_text())
 
 
 if __name__ == "__main__":
