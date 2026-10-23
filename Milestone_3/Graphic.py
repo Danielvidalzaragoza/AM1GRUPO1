@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
 def grafico_sol(soluciones: dict):
     fig, ax = plt.subplots()
@@ -9,7 +10,7 @@ def grafico_sol(soluciones: dict):
     ax.scatter([1, -1], [0, 0], color="black", zorder=5)
     ax.annotate("(1, 0)", (1, 0), xytext=(6, 6), textcoords="offset points")
     ax.annotate("(-1, 0)", (-1, 0), xytext=(6, 6), textcoords="offset points")
-    ax.axis("equal")
+    ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("Posición x")
     ax.set_ylabel("Velocidad v")
     ax.set_title("Órbita del oscilador armónico simple")
@@ -26,4 +27,15 @@ def grafico_error(tiempos: list, errores: dict):
     ax.set_title("Error temporal estimado mediante Richardson")
     ax.legend()
     return fig
-    
+
+def grafico_convergencia(error_final: dict, pasos: dict):
+    fig, ax = plt.subplots()
+    for esquema, error in error_final.items():
+        ax.plot(pasos[esquema], error, marker="o", label=esquema)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Número de pasos de tiempo")
+    ax.set_ylabel(r"Diferencia final $\|U_N-U_{2N}\|$")
+    ax.set_title("Convergencia del sistema")
+    ax.legend()
+    return fig

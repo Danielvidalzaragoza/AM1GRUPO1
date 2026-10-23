@@ -19,4 +19,4 @@ def sol_error_cauchy(
     difference_fine_finer = np.linalg.norm(fine[::2] - finer[::4])
     orden = np.log(difference_coarse_fine / difference_fine_finer) / np.log(2)
     error = Richardson.error_richardson(coarse, fine[::2], orden)
-    return coarse, error, orden
+    return coarse, error
