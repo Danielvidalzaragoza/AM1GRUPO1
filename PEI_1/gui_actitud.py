@@ -835,7 +835,7 @@ class PanelActitud:
         self.ax_stab.scatter(z_act.real, z_act.imag, color=COLOR_EJES[self.eje], s=35, zorder=6, marker="o", edgecolor="black", linewidths=1)
 
         handles = [Line2D([0], [0], color=colores_esq[esq], lw=1.5, label=esq) for esq in ("EE", "EI", "CN", "RK4", "LF")]
-        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=5, markeredgecolor="black", markeredgewidth=1, label="eje activo"))
+        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=5, markeredgecolor="black", markeredgewidth=1, label="Autvalores eje activo"))
         
         self.ax_stab.legend(handles=handles, loc="lower left", fontsize=5.5, frameon=False, labelcolor=TEXTO, handlelength=1.0, borderaxespad=0.2, ncol=3)
         
