@@ -30,7 +30,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 if __package__:
     from .cuerpos import CATALOGO
-    from .numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad
+    from .numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad, datos_convergencia
     from .space_physics import (
         ecuaciones_rotacion,
         estabilidad_ejes,
@@ -42,7 +42,7 @@ if __package__:
     )
 else:
     from cuerpos import CATALOGO
-    from numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad
+    from numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad, datos_convergencia
     from space_physics import (
         ecuaciones_rotacion,
         estabilidad_ejes,
@@ -284,7 +284,8 @@ class PanelActitud:
             (0.570, 0.685, 0.422, 0.23),
             (0.570, 0.265, 0.204, 0.41),
             (0.786, 0.265, 0.206, 0.41),
-            (0.570, 0.02, 0.422, 0.235),
+            (0.570, 0.02, 0.204, 0.235),
+            (0.786, 0.02, 0.206, 0.235),
         ):
             self._tarjeta(*rect)
 
@@ -431,20 +432,41 @@ class PanelActitud:
         ax_s.set_ylabel("Im(z)", fontsize=6.5, labelpad=1)
         self.ax_stab = ax_s
 
-        self._rotulo(0.585, 0.232, "DERIVA NUMÉRICA DE LOS INVARIANTES")
-        self.ax_deriva = self.fig.add_axes((0.605, 0.062, 0.368, 0.142))
+        
+        
+        self._rotulo(0.585, 0.232, "DERIVA DE INVARIANTES")
+        self.ax_deriva = self.fig.add_axes(
+            (0.605, 0.062, 0.165, 0.142)
+        )
         self._estilo_2d(self.ax_deriva)
         self.ax_deriva.set_yscale("log")
-        (self.linea_dT,) = self.ax_deriva.plot([], [], color=COLOR_T, lw=1.3,
-                                               label="|ΔT| / T₀", animated=True)
-        (self.linea_dL,) = self.ax_deriva.plot([], [], color=COLOR_L, lw=1.3,
-                                               label="|ΔL²| / L₀²",
-                                               animated=True)
-        self.ax_deriva.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0),
-                              ncol=2, fontsize=8, frameon=False,
-                              labelcolor=TEXTO, handlelength=1.2,
-                              borderaxespad=0.1)
-        self.ax_deriva.set_xlabel("t  [s]", fontsize=8, labelpad=1)
+
+        (self.linea_dT,) = self.ax_deriva.plot(
+            [], [], color=COLOR_T, lw=1.5,
+            label="|ΔT| / T₀", animated=True
+        )
+        (self.linea_dL,) = self.ax_deriva.plot(
+            [], [], color=COLOR_L, lw=1.5,
+            label="|ΔL²| / L₀²", animated=True
+        )
+        self.ax_deriva.legend(
+            loc="lower right", bbox_to_anchor=(1.0, 1.0),
+            ncol=2, fontsize=7, frameon=False,
+            labelcolor=TEXTO, handlelength=1.0
+        )
+        self.ax_deriva.set_xlabel("t [s]", fontsize=8)
+
+        
+        self._rotulo(0.801, 0.232, "CONVERGENCIA DE INTEGRADORES")
+        self.ax_convergencia = self.fig.add_axes(
+            (0.812, 0.105, 0.165, 0.095)
+        )
+        self._estilo_2d(self.ax_convergencia)
+        self.ax_convergencia.set_xscale("log")
+        self.ax_convergencia.set_yscale("log")
+        self.ax_convergencia.set_xlabel("Δt", fontsize=8)
+        self.ax_convergencia.tick_params(labelsize=7)
+
         
         region_fase = TransformedBbox(Bbox.from_bounds(0.570, 0.265, 0.422, 0.41),
                                       self.fig.transFigure)
@@ -525,6 +547,7 @@ class PanelActitud:
             (0.012, 0.065, 0.155, 0.045), "Estimar error (Richardson)",
             CONTROL, CONTROL_HOVER, self.calcular_richardson,
         )
+
 
         self._rotulo(0.190, 0.186, "INERCIA Y VELOCIDAD DE GIRO")
         self._rotulo(0.380, 0.186, "PERTURBACIÓN Y SIMULACIÓN")
@@ -693,6 +716,7 @@ class PanelActitud:
         self._preparar_fase()
         self._actualizar_analisis()
         self._actualizar_estabilidad_plot()
+        self.mostrar_convergencia()
         self._completo = True
         self._dibujar()
 
@@ -773,6 +797,62 @@ class PanelActitud:
             )
         self._completo = True
         self._refrescar()
+
+    
+    def mostrar_convergencia(self, _=None):
+        ax = self.ax_convergencia
+        ax.clear()
+        self._estilo_2d(ax)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        colores = {
+            "EE": "#ff6b6b",
+            "EI": "#80ffb4",
+            "CN": "#4cc9f0",
+            "RK4": "#ffd166",
+            "LF": "#c792ea"
+        }
+        for esquema in ("EE", "EI", "CN", "RK4", "LF"):
+            dt, errores = datos_convergencia(
+                esquema, self.W0, 0, min(self.tf, 2.0),
+                self.F, self.J
+            )
+            validos = (
+                np.isfinite(errores)
+                & (errores > 0)
+                & np.isfinite(dt)
+                & (dt > 0)
+            )
+            if np.count_nonzero(validos) >= 2:
+                x = dt[validos]
+                y = errores[validos]
+
+                pendiente = np.polyfit(
+                    np.log(x), np.log(y), 1
+                )[0]
+                ax.loglog(
+                    x, y, "o-",
+                    color=colores[esquema],
+                    markersize=3,
+                    linewidth=1.6,
+                    label=f"{esquema} (p={pendiente:.2f})"
+                )
+        ax.set_xlabel("Δt", fontsize=8, labelpad=1)
+        ax.tick_params(labelsize=7)
+        # Leyenda debajo de la gráfica, en dos filas
+        ax.legend(
+            fontsize=7,
+            frameon=False,
+            labelcolor=TEXTO,
+            ncol=3,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.32),
+            handlelength=1.2,
+            columnspacing=0.8
+        )
+
+
+
 
     def _preparar_fase(self, limite=None):
         I1, I2, I3 = self.I
