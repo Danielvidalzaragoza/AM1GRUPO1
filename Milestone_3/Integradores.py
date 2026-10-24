@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Callable
 
-from Esquemas_temporales import CN, EE, EI, RK4
+from Esquemas_temporales import CN, EE, EI, RK4,LF
 
 
 def partition(t0: float, tf: float, N: float):
@@ -17,11 +17,17 @@ def integrar_Cauchy(
     tf: float,
     F: Callable[[np.ndarray, float], np.ndarray],
 ):
-    metodos = {"EE": EE, "EI": EI, "CN": CN, "RK4": RK4}
+    metodos = {"EE": EE, "EI": EI, "CN": CN, "RK4": RK4, "LF": LF}
     U = np.zeros((N_t + 1, len(U0)))
     U[0, :] = U0
     t = partition(t0, tf, N_t)
     metodo = metodos[esquema]
-    for n in range(N_t):
-        U[n + 1, :] = metodo(U[n, :], t[n + 1] - t[n], t[n], F)
+    if esquema == "LF":
+        # Para el esquema Leapfrog, necesitamos un paso inicial con otro método.
+        U[1, :] = EE(U[0, :], t[1] - t[0], t[0], F)
+        for n in range(1, N_t):
+            U[n + 1, :] = metodo(U[n, :], t[n + 1] - t[n], t[n], F, U[n - 1, :])
+    else:
+        for n in range(N_t):
+            U[n + 1, :] = metodo(U[n, :], t[n + 1] - t[n], t[n], F)
     return U

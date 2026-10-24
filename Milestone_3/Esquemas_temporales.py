@@ -3,8 +3,7 @@
     -Euler Implícito- EI
     -Crank-Nicolson- CN
     -Runge-Kutta de 4to orden- RK4
-
-    También se calculan las funciones de apoyo de Newton, Gauss-Seidel y Jacobiano para los métodos implícitos.
+    -Leapfrog- LF
 '''
 import numpy as np
 import Non_Linear_Solvers
@@ -37,4 +36,7 @@ def RK4(U:array, At:float, t:float, F:Callable[[array,float], array]):
     k4 = F(U + At * k3, t + At)
     return U + At * (k1 + 2 * k2 + 2 * k3 + k4) / 6
 
+def LF(U:array, At:float, t:float, F:Callable[[array,float], array], U_prev:array):
+    # Esquema Leapfrog (salto de rana) de segundo orden.
+    return U_prev + 2 * At * F(U, t)
 
