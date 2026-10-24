@@ -9,9 +9,6 @@ y el catalogo de cuerpos (cuerpos.py) para la geometria y la inercia.
 Para que la animacion sea fluida se usa "blitting": la parte estatica del
 cuadro de mando se dibuja una vez y en cada fotograma solo se repintan los
 elementos que cambian (cuerpo, ejes, curvas y textos de estado).
-
-Ejecutar desde la carpeta principal del proyecto:
-    python PEI_1/Solucion_PEI1/gui_actitud.py
 """
 
 import textwrap
@@ -33,7 +30,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 if __package__:
     from .cuerpos import CATALOGO
-    from .numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report
+    from .numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad
     from .space_physics import (
         ecuaciones_rotacion,
         estabilidad_ejes,
@@ -45,7 +42,7 @@ if __package__:
     )
 else:
     from cuerpos import CATALOGO
-    from numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report
+    from numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad
     from space_physics import (
         ecuaciones_rotacion,
         estabilidad_ejes,
@@ -83,8 +80,8 @@ ESQUEMAS = {
 }
 EJES = ("e₁   I₁ mínimo", "e₂   I₂ intermedio", "e₃   I₃ máximo")
 SUB = "₁₂₃"
-ANCHO, ALTO = 15, 8.4
-TODAS = (0, 1, 2)          # grupos de graficas animadas (omega, fases, deriva)
+ANCHO, ALTO = 16.5, 8.4
+TODAS = (0, 1, 2)
 ESTADOS = {
     "listo": ("●  LISTO", TENUE),
     "marcha": ("●  EN CURSO", BIEN),
@@ -107,12 +104,11 @@ def _aplicar_estilo():
         "grid.linewidth": 0.6,
         "figure.facecolor": FONDO,
         "axes.facecolor": TARJETA,
-        "text.hinting": "no_hinting",   # texto ~2x mas rapido de rasterizar
+        "text.hinting": "no_hinting",
     })
 
 
 def _alinear_con_z(v):
-    """Rotacion que lleva la direccion de v al eje vertical de la vista."""
     v = v / np.linalg.norm(v)
     eje = np.cross(v, [0, 0, 1])
     s, c = np.linalg.norm(eje), v[2]
@@ -124,7 +120,6 @@ def _alinear_con_z(v):
 
 
 def _malla_elipsoide(semiejes, limite, paralelos=7, meridianos=12, puntos=90):
-    """Paralelos y meridianos del elipsoide, cortados (NaN) fuera del cubo."""
     a, b, c = semiejes
     s = np.linspace(0, 2 * np.pi, puntos)
     lineas = []
@@ -146,12 +141,6 @@ def _malla_elipsoide(semiejes, limite, paralelos=7, meridianos=12, puntos=90):
 
 
 def _cotas_polhodia(I, energia, momento):
-    """Cota de |w_k| sobre la polhodia (interseccion de los dos elipsoides).
-
-    Eliminando una componente entre 2T y L^2:
-        I1 (I3 - I1) w1^2 + I2 (I3 - I2) w2^2 = 2 T I3 - L^2
-        I2 (I2 - I1) w2^2 + I3 (I3 - I1) w3^2 = L^2 - 2 T I1
-    """
     I1, I2, I3 = I
     dos_T = 2 * energia
     D3 = max(dos_T * I3 - momento, 0.0)
@@ -167,14 +156,6 @@ def _cotas_polhodia(I, energia, momento):
 
 
 class _Sprite(Artist):
-    """Rotulo pre-rasterizado que se estampa como imagen en cada fotograma.
-
-    Rasterizar un texto con Agg cuesta 1-3 ms por fotograma; estampar la
-    imagen ya hecha, ~0.01 ms. Cada (texto, color, dpi) se rasteriza una vez.
-    `xy` es la posicion en pixeles del centro (ha="center") o del borde
-    derecho (ha="right").
-    """
-
     def __init__(self, fontsize, ha="center"):
         super().__init__()
         self._fuente = {"fontsize": fontsize, "fontweight": "bold"}
@@ -194,7 +175,6 @@ class _Sprite(Artist):
             rgba = np.asarray(fig.canvas.buffer_rgba())
             filas = np.flatnonzero(rgba[..., 3].any(axis=1))
             columnas = np.flatnonzero(rgba[..., 3].any(axis=0))
-            # draw_image pone la fila 0 abajo: se invierte la imagen.
             self._cache[clave] = rgba[filas[0]:filas[-1] + 1,
                                       columnas[0]:columnas[-1] + 1][::-1].copy()
         return self._cache[clave]
@@ -213,8 +193,6 @@ class _Sprite(Artist):
 
 
 class PanelActitud:
-    """Cuadro de mando: cuerpo 3D, espacio de fases, omega(t) y deriva."""
-
     def __init__(self):
         _aplicar_estilo()
         self.fig = plt.figure(figsize=(ANCHO, ALTO), facecolor=FONDO)
@@ -224,19 +202,17 @@ class PanelActitud:
         self.en_marcha = False
         self.estado = "listo"
         self._cargando = False
-        self._fondo = None          # imagen de la parte estatica (blitting)
-        self._completo = True       # hay que redibujar la figura entera
-        self._camara = None         # arrastre de la camara del cuerpo
+        self._fondo = None
+        self._completo = True
+        self._camara = None
         self._fotograma = 0
-        self._caja_cuerpo = None    # pixeles ocupados por el cuerpo (ultimo dibujo)
+        self._caja_cuerpo = None
 
         self._crear_marco()
         self._crear_vista_cuerpo()
         self._crear_graficas()
         self._crear_controles()
 
-        # 1 ms: en Windows "after(15)" espera en realidad ~31 ms (el reloj del
-        # sistema avanza a saltos de 15.6 ms); el ritmo lo marca el dibujo.
         self.timer = self.fig.canvas.new_timer(interval=1)
         self.timer.add_callback(self._tick)
         conectar = self.fig.canvas.mpl_connect
@@ -250,7 +226,6 @@ class PanelActitud:
         self._cargar_inercias()
         self.reiniciar()
 
-    # ------------------------------------------------------------ maquetacion
     def _tarjeta(self, x, y, ancho, alto):
         self.fig.add_artist(FancyBboxPatch(
             (x, y), ancho, alto,
@@ -283,8 +258,6 @@ class PanelActitud:
             "Ampliación de Matemáticas 1",
             fontsize=9.5, color=TENUE, va="center",
         )
-        # Estado (cambia poco: recuadro opaco que se repinta en el fondo, ver
-        # _actualizar_fondo) y reloj (animado).
         self.ax_estado = self.fig.add_axes((0.74, 0.952, 0.147, 0.032))
         self.ax_estado.set_facecolor(FONDO)
         self.ax_estado.set(xticks=[], yticks=[])
@@ -305,19 +278,18 @@ class PanelActitud:
             fontsize=8.5, color=TENUE, ha="right", va="center",
         )
         for rect in (
-            (0.008, 0.02, 0.19, 0.895),     # controles
-            (0.205, 0.215, 0.415, 0.7),     # cuerpo
-            (0.205, 0.02, 0.415, 0.185),    # deslizadores
-            (0.628, 0.685, 0.364, 0.23),    # omega(t)
-            (0.628, 0.265, 0.364, 0.41),    # espacio de fases
-            (0.628, 0.02, 0.364, 0.235),    # deriva
+            (0.008, 0.02, 0.165, 0.895),
+            (0.178, 0.215, 0.380, 0.7),
+            (0.178, 0.02, 0.380, 0.185),
+            (0.570, 0.685, 0.422, 0.23),
+            (0.570, 0.265, 0.204, 0.41),
+            (0.786, 0.265, 0.206, 0.41),
+            (0.570, 0.02, 0.422, 0.235),
         ):
             self._tarjeta(*rect)
 
     def _crear_vista_cuerpo(self):
-        rect = (0.208, 0.218, 0.409, 0.694)
-        # Region de blitting: toda la tarjeta (el Axes 3D se encoge a un
-        # cuadrado y dejaria fuera parte de los rotulos).
+        rect = (0.181, 0.218, 0.374, 0.694)
         self._region_cuerpo = TransformedBbox(Bbox.from_bounds(*rect),
                                               self.fig.transFigure)
         cielo = self.fig.add_axes(rect, zorder=0)
@@ -341,7 +313,6 @@ class PanelActitud:
             borderaxespad=0.5,
         )
 
-        # Todo lo de esta vista es animado: girar la camara solo repinta esto.
         ax = self.fig.add_axes(rect, projection="3d", zorder=1)
         ax.set_facecolor((0, 0, 0, 0))
         ax.set_axis_off()
@@ -356,10 +327,6 @@ class PanelActitud:
             ax.add_collection3d(coleccion)
             return coleccion
 
-        # Capas en el orden en que se pintan (ver _pintar_cuerpo): referencias
-        # fijas, segmentos por detras del cuerpo, cuerpo, segmentos por delante.
-        # Los ejes, L, omega y la estela van en solo dos colecciones porque
-        # cada coleccion tiene un coste fijo al dibujarse.
         s = np.linspace(0, 2 * np.pi, 90)
         circulo = np.column_stack((1.25 * np.cos(s), 1.25 * np.sin(s), 0 * s))
         self.referencias = capa(Line3DCollection(
@@ -379,19 +346,19 @@ class PanelActitud:
         self.rotulo_L.texto, self.rotulo_L.color = "L", COLOR_L
         self.rotulo_w.texto, self.rotulo_w.color = "ω", COLOR_W
 
-        self.texto_nombre = self.fig.text(0.217, 0.889, "", fontsize=13.5,
+        self.texto_nombre = self.fig.text(0.188, 0.889, "", fontsize=13.5,
                                           fontweight="bold")
-        self.texto_descripcion = self.fig.text(0.217, 0.874, "", fontsize=9,
+        self.texto_descripcion = self.fig.text(0.188, 0.874, "", fontsize=9,
                                                color=TENUE, va="top",
                                                linespacing=1.4)
-        self.texto_aviso = self.fig.text(0.217, 0.818, "", fontsize=9,
+        self.texto_aviso = self.fig.text(0.188, 0.818, "", fontsize=9,
                                          color=AVISO, va="top",
                                          linespacing=1.4)
         self.rotulo_volteos = _Sprite(12, ha="right")
 
     def _crear_graficas(self):
-        self._rotulo(0.64, 0.893, "VELOCIDAD ANGULAR EN EJES CUERPO  ω(t)  [rad/s]")
-        self.ax_w = self.fig.add_axes((0.668, 0.718, 0.312, 0.158))
+        self._rotulo(0.585, 0.893, "VELOCIDAD ANGULAR EN EJES CUERPO  ω(t)  [rad/s]")
+        self.ax_w = self.fig.add_axes((0.605, 0.718, 0.368, 0.158))
         self._estilo_2d(self.ax_w)
         self.lineas_w = [
             self.ax_w.plot([], [], color=color, lw=1.4, label=f"ω{SUB[k]}",
@@ -402,21 +369,23 @@ class PanelActitud:
                          fontsize=8, frameon=False, labelcolor=TEXTO,
                          handlelength=1.2, borderaxespad=0.1)
 
-        self._rotulo(0.64, 0.653, "ESPACIO DE FASES  ·  SUPERFICIES DE POINSOT")
-        ax = self.fig.add_axes((0.632, 0.27, 0.356, 0.375), projection="3d",
-                               computed_zorder=False)
-        ax.set_facecolor((0, 0, 0, 0))
-        for k, (eje, color) in enumerate(zip((ax.xaxis, ax.yaxis, ax.zaxis),
+        self._rotulo(0.585, 0.653, "MAPA DE FASES")
+        self._rotulo(0.801, 0.653, "ZONAS DE ESTABILIDAD")
+        
+        ax_f = self.fig.add_axes((0.577, 0.280, 0.190, 0.35), projection="3d",
+                                 computed_zorder=False)
+        ax_f.set_facecolor((0, 0, 0, 0))
+        for k, (eje, color) in enumerate(zip((ax_f.xaxis, ax_f.yaxis, ax_f.zaxis),
                                              COLOR_EJES)):
             eje.set_pane_color((0.08, 0.12, 0.2, 0.6))
             eje.line.set_color(BORDE)
             eje.set_major_locator(MaxNLocator(3))
-            eje.set_label_text(f"ω{SUB[k]}", color=color, fontsize=10)
-            eje.labelpad = -7
-        ax.tick_params(labelsize=6.5, colors=TENUE, pad=-2)
-        ax.set_box_aspect((1, 1, 1), zoom=0.92)
-        ax.view_init(elev=22, azim=-50)
-        self.ax_fase = ax
+            eje.set_label_text(f"ω{SUB[k]}", color=color, fontsize=9)
+            eje.labelpad = -8
+        ax_f.tick_params(labelsize=6, colors=TENUE, pad=-2)
+        ax_f.set_box_aspect((1, 1, 1), zoom=0.92)
+        ax_f.view_init(elev=22, azim=-50)
+        self.ax_fase = ax_f
 
         vacio = [np.zeros((2, 3))]
         self.malla_T = Line3DCollection(vacio, colors=[to_rgba(COLOR_T, 0.25)],
@@ -428,27 +397,42 @@ class PanelActitud:
                                            linewidths=1.1, linestyles="--",
                                            zorder=2)
         for coleccion in (self.malla_T, self.malla_L, self.separatriz):
-            ax.add_collection3d(coleccion)
-        (self.eq_estables,) = ax.plot([], [], [], "o", ms=4.5, color=BIEN,
+            ax_f.add_collection3d(coleccion)
+        (self.eq_estables,) = ax_f.plot([], [], [], "o", ms=4, color=BIEN,
                                       ls="none", zorder=3)
-        (self.eq_inestables,) = ax.plot([], [], [], "X", ms=6.5, color=MAL,
+        (self.eq_inestables,) = ax_f.plot([], [], [], "X", ms=5.5, color=MAL,
                                         ls="none", zorder=3)
-        (self.trayectoria,) = ax.plot([], [], [], color=COLOR_W, lw=1.3,
+        (self.trayectoria,) = ax_f.plot([], [], [], color=COLOR_W, lw=1.3,
                                       zorder=4, animated=True)
-        (self.punto,) = ax.plot([], [], [], "o", ms=6, color="white",
+        (self.punto,) = ax_f.plot([], [], [], "o", ms=5, color="white",
                                 mec=COLOR_W, mew=1.5, zorder=5, animated=True)
-        ax.legend(
+        
+        ax_f.legend(
             [Line2D([], [], color=COLOR_T), Line2D([], [], color=COLOR_L),
              Line2D([], [], color="#f4f4f8", ls="--"),
-             Line2D([], [], color=BIEN, marker="o", ls="none", ms=4.5),
-             Line2D([], [], color=MAL, marker="X", ls="none", ms=6)],
-            ["energía 2T", "momento L²", "separatriz", "centro", "silla"],
-            loc="lower left", bbox_to_anchor=(0.0, -0.02), ncol=5, fontsize=7.5,
-            frameon=False, labelcolor=TEXTO, handlelength=1.3, columnspacing=0.9,
+             Line2D([], [], color=BIEN, marker="o", ls="none", ms=4),
+             Line2D([], [], color=MAL, marker="X", ls="none", ms=5)],
+            ["2T", "L²", "separatriz", "centro", "silla"],
+            loc="lower left", bbox_to_anchor=(0.04, -0.06), ncol=5, fontsize=6.5,
+            frameon=False, labelcolor=TEXTO, handlelength=1.0, columnspacing=0.5,
         )
 
-        self._rotulo(0.64, 0.232, "DERIVA NUMÉRICA DE LOS INVARIANTES")
-        self.ax_deriva = self.fig.add_axes((0.668, 0.062, 0.312, 0.142))
+        ax_s = self.fig.add_axes((0.812, 0.30, 0.165, 0.33))
+        ax_s.set_facecolor(TARJETA)
+        for lado in ("top", "right"):
+            ax_s.spines[lado].set_visible(False)
+        for lado in ("left", "bottom"):
+            ax_s.spines[lado].set_color(BORDE)
+        ax_s.tick_params(labelsize=6.5, colors=TENUE, length=2)
+        ax_s.xaxis.set_major_locator(MaxNLocator(4))
+        ax_s.yaxis.set_major_locator(MaxNLocator(4))
+        ax_s.grid(True, color=BORDE, linewidth=0.5)
+        ax_s.set_xlabel("Re(z)", fontsize=6.5, labelpad=1)
+        ax_s.set_ylabel("Im(z)", fontsize=6.5, labelpad=1)
+        self.ax_stab = ax_s
+
+        self._rotulo(0.585, 0.232, "DERIVA NUMÉRICA DE LOS INVARIANTES")
+        self.ax_deriva = self.fig.add_axes((0.605, 0.062, 0.368, 0.142))
         self._estilo_2d(self.ax_deriva)
         self.ax_deriva.set_yscale("log")
         (self.linea_dT,) = self.ax_deriva.plot([], [], color=COLOR_T, lw=1.3,
@@ -461,9 +445,8 @@ class PanelActitud:
                               labelcolor=TEXTO, handlelength=1.2,
                               borderaxespad=0.1)
         self.ax_deriva.set_xlabel("t  [s]", fontsize=8, labelpad=1)
-        # Grupos animados de las graficas: (artistas, regiones de pantalla).
-        # Durante la animacion se repinta uno por fotograma, por turnos.
-        region_fase = TransformedBbox(Bbox.from_bounds(0.628, 0.265, 0.364, 0.41),
+        
+        region_fase = TransformedBbox(Bbox.from_bounds(0.570, 0.265, 0.422, 0.41),
                                       self.fig.transFigure)
         self._grupos_graficas = (
             ([*self.lineas_w, self.texto_reloj], [self.ax_w.bbox, self._region_reloj]),
@@ -503,48 +486,48 @@ class PanelActitud:
         return boton
 
     def _crear_controles(self):
-        self._rotulo(0.02, 0.893, "CUERPO")
+        self._rotulo(0.015, 0.893, "CUERPO")
         self.radio_cuerpo = self._radio(
-            (0.012, 0.705, 0.182, 0.18), [c.nombre for c in CATALOGO], 0,
+            (0.010, 0.705, 0.155, 0.18), [c.nombre for c in CATALOGO], 0,
             self.cambiar_cuerpo,
         )
-        self._rotulo(0.02, 0.69, "EJE DE GIRO INICIAL")
-        self.radio_eje = self._radio((0.012, 0.598, 0.182, 0.088), EJES,
+        self._rotulo(0.015, 0.69, "EJE DE GIRO INICIAL")
+        self.radio_eje = self._radio((0.010, 0.598, 0.155, 0.088), EJES,
                                      self.eje, self.cambiar_eje)
-        self._rotulo(0.02, 0.583, "INTEGRADOR")
-        self.radio_esquema = self._radio((0.012, 0.432, 0.182, 0.147),
+        self._rotulo(0.015, 0.583, "INTEGRADOR")
+        self.radio_esquema = self._radio((0.010, 0.432, 0.155, 0.147),
                                          list(ESQUEMAS), 3, self.cambiar_esquema)
 
-        self._rotulo(0.02, 0.412, "ANÁLISIS ESPECTRAL  (linealización)")
-        mono = {"fontsize": 8.6, "family": MONO}
+        self._rotulo(0.015, 0.412, "ANÁLISIS ESPECTRAL  (linealización)")
+        mono = {"fontsize": 8.0, "family": MONO}
         self.filas_eje = []
         for k in range(3):
             y = 0.385 - 0.024 * k
             self.filas_eje.append((
-                self.fig.text(0.016, y, "", color=COLOR_EJES[k],
+                self.fig.text(0.012, y, "", color=COLOR_EJES[k],
                               fontweight="bold", **mono),
-                self.fig.text(0.045, y, "", **mono),
-                self.fig.text(0.19, y, "", ha="right", **mono),
+                self.fig.text(0.038, y, "", **mono),
+                self.fig.text(0.168, y, "", ha="right", **mono),
             ))
-        self.texto_invariantes = self.fig.text(0.02, 0.305, "", **mono)
-        self.texto_cota = self.fig.text(0.02, 0.281, "", **mono)
-        self.texto_esquema = self.fig.text(0.02, 0.249, "", **mono)
-        self.texto_R = self.fig.text(0.02, 0.225, "", **mono)
-        self.texto_richardson = self.fig.text(0.02, 0.193, "", **mono)
-        self.texto_richardson_2 = self.fig.text(0.02, 0.169, "", **mono)
+        self.texto_invariantes = self.fig.text(0.015, 0.305, "", **mono)
+        self.texto_cota = self.fig.text(0.015, 0.281, "", **mono)
+        self.texto_esquema = self.fig.text(0.015, 0.257, "", **mono)
+        self.texto_R = self.fig.text(0.015, 0.233, "", **mono)
+        self.texto_richardson = self.fig.text(0.015, 0.201, "", **mono)
+        self.texto_richardson_2 = self.fig.text(0.015, 0.177, "", **mono)
 
-        self.boton_marcha = self._boton((0.016, 0.085, 0.087, 0.05), "",
+        self.boton_marcha = self._boton((0.012, 0.125, 0.075, 0.042), "",
                                         ACENTO, "#6aa0ff", self.alternar)
-        self.boton_reinicio = self._boton((0.107, 0.085, 0.087, 0.05),
+        self.boton_reinicio = self._boton((0.092, 0.125, 0.075, 0.042),
                                           "↺  Reiniciar", CONTROL,
                                           CONTROL_HOVER, self.reiniciar)
         self.boton_richardson = self._boton(
-            (0.016, 0.03, 0.178, 0.045), "Estimar error (Richardson)",
+            (0.012, 0.065, 0.155, 0.045), "Estimar error (Richardson)",
             CONTROL, CONTROL_HOVER, self.calcular_richardson,
         )
 
-        self._rotulo(0.217, 0.186, "INERCIA Y VELOCIDAD DE GIRO")
-        self._rotulo(0.425, 0.186, "PERTURBACIÓN Y SIMULACIÓN")
+        self._rotulo(0.190, 0.186, "INERCIA Y VELOCIDAD DE GIRO")
+        self._rotulo(0.380, 0.186, "PERTURBACIÓN Y SIMULACIÓN")
         parametros = [
             ("I1", r"$I_1$", 0.05, 3.0, 1.0, "%.2f"),
             ("I2", r"$I_2$", 0.05, 3.0, 1.5, "%.2f"),
@@ -557,7 +540,7 @@ class PanelActitud:
         ]
         self.sliders, self._valores = {}, {}
         for n, (clave, etiqueta, minimo, maximo, inicial, formato) in enumerate(parametros):
-            x, ancho = (0.245, 0.112) if n < 4 else (0.462, 0.1)
+            x, ancho = (0.210, 0.095) if n < 4 else (0.400, 0.085)
             y = 0.146 - 0.036 * (n % 4)
             ax = self.fig.add_axes((x, y, ancho, 0.022))
             ax.set_facecolor(TARJETA)
@@ -567,25 +550,27 @@ class PanelActitud:
                 handle_style={"facecolor": "white", "edgecolor": ACENTO,
                               "size": 9},
             )
-            slider.drawon = False       # el redibujado lo gestiona _refrescar
-            slider.label.set(color=TEXTO, fontsize=10.5)
+            slider.drawon = False
+            slider.label.set(color=TEXTO, fontsize=9.5)
             slider.valtext.set_visible(False)
-            # Valor en un recuadro opaco propio: se puede repintar al arrastrar.
-            caja = self.fig.add_axes((x + ancho + 0.004, y - 0.002, 0.048, 0.026))
+            caja = self.fig.add_axes((x + ancho + 0.003, y - 0.002, 0.042, 0.026))
             caja.set_facecolor(TARJETA)
             caja.set(xticks=[], yticks=[])
             for lado in caja.spines.values():
                 lado.set_visible(False)
             valor = caja.text(0, 0.5, formato % inicial, va="center",
-                              fontsize=8.5, color=TENUE)
+                              fontsize=8.0, color=TENUE)
             self._valores[clave] = (caja, valor, formato)
-            slider.on_changed(lambda val, clave=clave: self._slider_cambiado(clave, val))
+            
+            if clave == "dt":
+                slider.on_changed(lambda val, clave=clave: self._dt_cambiado(val))
+            else:
+                slider.on_changed(lambda val, clave=clave: self._slider_cambiado(clave, val))
+                
             self.sliders[clave] = slider
-        # Mantener siempre I1 <= I2 <= I3 al arrastrar.
         I1, I2, I3 = (self.sliders[k] for k in ("I1", "I2", "I3"))
         I1.slidermax, I2.slidermin, I2.slidermax, I3.slidermin = I2, I1, I3, I2
 
-    # ------------------------------------------------------------- acciones
     def cambiar_cuerpo(self, nombre):
         self.cuerpo = next(c for c in CATALOGO if c.nombre == nombre)
         self._resaltar(self.radio_cuerpo)
@@ -600,7 +585,18 @@ class PanelActitud:
     def cambiar_esquema(self, etiqueta):
         self.esquema = ESQUEMAS[etiqueta]
         self._resaltar(self.radio_esquema)
+        self._actualizar_estabilidad_plot()
+        self.fig.canvas.draw_idle()
         self.reiniciar()
+
+    def _dt_cambiado(self, valor):
+        _, _, formato = self._valores["dt"]
+        self._valores["dt"][1].set_text(formato % valor)
+        if self._cargando:
+            return
+        self.At = valor
+        self._actualizar_estabilidad_plot()
+        self.fig.canvas.draw_idle()
 
     def _slider_cambiado(self, clave, valor):
         _, texto, formato = self._valores[clave]
@@ -608,13 +604,12 @@ class PanelActitud:
         if self._cargando:
             return
         if clave == "vel":
-            self._completo = True   # el fondo guardado tiene el valor antiguo
+            self._completo = True
             self._refrescar()
         else:
             self.reiniciar()
 
     def _cargar_inercias(self):
-        """Pone en los deslizadores los momentos de inercia del cuerpo."""
         self._cargando = True
         try:
             for clave, valor in zip(("I1", "I2", "I3"),
@@ -646,7 +641,7 @@ class PanelActitud:
 
     def _soltar(self, _):
         self._camara = None
-        if self._completo:      # p. ej. al soltar un deslizador
+        if self._completo:
             self._refrescar()
 
     def alternar(self, _=None):
@@ -666,7 +661,6 @@ class PanelActitud:
         self._refrescar()
 
     def reiniciar(self, _=None):
-        """Lee los parametros y vuelve a t = 0 (sigue en marcha si lo estaba)."""
         s = self.sliders
         self.I = np.array([s["I1"].val, s["I2"].val, s["I3"].val])
         I1, I2, I3 = self.I
@@ -685,7 +679,6 @@ class PanelActitud:
         self.R = np.eye(3)
         self.n = 0
         self.energia0, self.momento0 = invariantes(self.W0, I1, I2, I3)
-        # Vista con L0 vertical: L se conserva, asi el volteo se ve "arriba/abajo".
         self.P = _alinear_con_z(self.I * self.W0)
         self.puntas = np.zeros((self.N + 1, 3))
         self.puntas[0] = self.P[:, self.eje]
@@ -699,11 +692,11 @@ class PanelActitud:
 
         self._preparar_fase()
         self._actualizar_analisis()
+        self._actualizar_estabilidad_plot()
         self._completo = True
         self._dibujar()
 
     def _avanzar(self):
-        """Un paso del esquema elegido y de la actitud. False si diverge."""
         n = self.n
         try:
             with np.errstate(all="ignore"):
@@ -747,8 +740,6 @@ class PanelActitud:
             self.en_marcha = False
             self.timer.stop()
             self.estado = "completado"
-        # El cuerpo se repinta en cada fotograma; las graficas, una por
-        # fotograma por turnos (todas en el ultimo, al terminar o diverger).
         self._fotograma += 1
         self._dibujar(grupos=(self._fotograma % 3,) if self.en_marcha else TODAS)
 
@@ -783,14 +774,11 @@ class PanelActitud:
         self._completo = True
         self._refrescar()
 
-    # ------------------------------------------------------------- dibujo
     def _preparar_fase(self, limite=None):
-        """Elipsoides de Poinsot, separatriz, equilibrios y limites."""
         I1, I2, I3 = self.I
         semiejes_T = np.sqrt(2 * self.energia0 / self.I)
         semiejes_L = np.sqrt(self.momento0) / self.I
         if limite is None:
-            # Encuadre ajustado a la polhodia, no a los elipsoides completos.
             limite = 1.3 * _cotas_polhodia(self.I, self.energia0, self.momento0).max()
         self._limite_fase = limite
         self.malla_T.set_segments(_malla_elipsoide(semiejes_T, limite))
@@ -800,7 +788,6 @@ class PanelActitud:
             self.separatriz.set_segments([curva, curva * [1, 1, -1]])
         else:
             self.separatriz.set_segments([np.zeros((2, 3))])
-        # Equilibrios +-sqrt(2T/Ik) ek; los que quedan fuera del encuadre, NaN.
         a1, a2, a3 = np.where(semiejes_T <= limite, semiejes_T, np.nan)
         self.eq_estables.set_data_3d(np.array([[a1, -a1, 0, 0], [0, 0, 0, 0],
                                                [0, 0, a3, -a3]]))
@@ -812,6 +799,50 @@ class PanelActitud:
         self.ax_w.set(xlim=(0, self.tf), ylim=(-self._limite_w, self._limite_w))
         self._techo_deriva = 1e-12
         self.ax_deriva.set(xlim=(0, self.tf), ylim=(1e-16, self._techo_deriva))
+
+    def _actualizar_estabilidad_plot(self):
+        self.ax_stab.clear()
+        self.ax_stab.set_facecolor(TARJETA)
+        for lado in ("top", "right"):
+            self.ax_stab.spines[lado].set_visible(False)
+        for lado in ("left", "bottom"):
+            self.ax_stab.spines[lado].set_color(BORDE)
+        self.ax_stab.tick_params(labelsize=6.5, colors=TENUE, length=2)
+        self.ax_stab.xaxis.set_major_locator(MaxNLocator(4))
+        self.ax_stab.yaxis.set_major_locator(MaxNLocator(4))
+        self.ax_stab.grid(True, color=BORDE, linewidth=0.5)
+
+        X, Y, regiones = obtener_todas_regiones_estabilidad()
+        colores_esq = {
+            "EE": "#ff6b6b",
+            "EI": "#80ffb4",
+            "CN": "#4cc9f0",
+            "RK4": "#ffd166",
+            "LF": "#c792ea"
+        }
+
+        for esq, limite in regiones.items():
+            color = colores_esq.get(esq, "#ffffff")
+            self.ax_stab.contourf(X, Y, limite, levels=[0, 1.0], colors=[color], alpha=0.10)
+            self.ax_stab.contour(X, Y, limite, levels=[1.0], colors=[color], linewidths=1.2)
+
+        self.ax_stab.axhline(0, color=BORDE, linewidth=0.8)
+        self.ax_stab.axvline(0, color=BORDE, linewidth=0.8)
+
+        _, _, autovalores = estabilidad_ejes(self.I[0], self.I[1], self.I[2], self.Omega)
+        lam_act = autovalores[f"I{self.eje + 1}"]
+        z_act = self.At * lam_act
+        self.ax_stab.scatter(z_act.real, z_act.imag, color=COLOR_EJES[self.eje], s=35, zorder=6, marker="o", edgecolor="black", linewidths=1)
+
+        handles = [Line2D([0], [0], color=colores_esq[esq], lw=1.5, label=esq) for esq in ("EE", "EI", "CN", "RK4", "LF")]
+        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=5, markeredgecolor="black", markeredgewidth=1, label="eje activo"))
+        
+        self.ax_stab.legend(handles=handles, loc="lower left", fontsize=5.5, frameon=False, labelcolor=TEXTO, handlelength=1.0, borderaxespad=0.2, ncol=3)
+        
+        self.ax_stab.set_xlim(-3.2, 0.8)
+        self.ax_stab.set_ylim(-1.8, 2.3)
+        self.ax_stab.set_xlabel("Re(z)", fontsize=6.5, labelpad=1)
+        self.ax_stab.set_ylabel("Im(z)", fontsize=6.5, labelpad=1)
 
     def _actualizar_analisis(self):
         I1, I2, I3 = self.I
@@ -868,9 +899,8 @@ class PanelActitud:
         M = self.P @ self.R
         vertices = self.caras @ M.T
         self.poly.set_verts(vertices)
-        self._vertices = vertices.reshape(-1, 3)   # para la caja en pixeles
+        self._vertices = vertices.reshape(-1, 3)
 
-        # Iluminacion con la luz fija respecto a la camara.
         azimut = np.radians(self.ax_cuerpo.azim)
         elevacion = np.radians(self.ax_cuerpo.elev)
         vista = np.array([np.cos(elevacion) * np.cos(azimut),
@@ -891,7 +921,6 @@ class PanelActitud:
                       + 0.28 * brillo[:, None], 0, 1)
         self.poly.set_facecolor(np.column_stack((rgb, base[:, 3])))
 
-        # Segmentos: (punto inicial, punto final, color RGBA, grosor).
         segmentos, colores, grosores = [], [], []
 
         def segmento(p0, p1, color, grosor):
@@ -913,7 +942,6 @@ class PanelActitud:
         w /= np.linalg.norm(w)
         segmento(1.04 * L, 1.3 * L, to_rgba(COLOR_L, 0.9), 3.2)
         segmento(1.04 * w, 1.2 * w, to_rgba(COLOR_W), 1.8)
-        # Rotulos de L y omega desplazados a los lados para no tapar al de ek.
         anclas += [(self.rotulo_L, 1.34 * L + 0.13 * derecha),
                    (self.rotulo_w, 1.2 * w - 0.13 * derecha)]
         self._anclas = anclas
@@ -921,8 +949,6 @@ class PanelActitud:
         segmentos = np.array(segmentos)
         colores = np.array(colores)
         grosores = np.array(grosores)
-        # Estela de la punta del eje de giro durante los ultimos 4 s (~80
-        # segmentos: cada segmento es un Path de matplotlib y cuesta).
         inicio = max(0, self.n - int(4 / self.At))
         paso = max(1, (self.n - inicio) // 80)
         puntos = self.puntas[inicio:self.n + 1:paso] * (self.extension[self.eje] + 0.3)
@@ -934,8 +960,6 @@ class PanelActitud:
             colores = np.concatenate((tonos, colores))
             grosores = np.concatenate((np.full(len(estela), 1.6), grosores))
 
-        # Todo esta fuera del cuerpo (radio <= 1): un segmento queda delante
-        # si su punto medio esta en el hemisferio que mira a la camara.
         delante = segmentos.mean(axis=1) @ vista >= 0
         for capa, elegidos in ((self.capa_delante, delante),
                                (self.capa_detras, ~delante)):
@@ -977,7 +1001,6 @@ class PanelActitud:
             self._preparar_fase_ampliada(1.3 * np.abs(estados[-1]).max())
 
     def _preparar_fase_ampliada(self, limite):
-        """El esquema se sale del encuadre (deriva): se amplia sin borrar."""
         limite_w, techo = self._limite_w, self._techo_deriva
         self._preparar_fase(limite)
         self._limite_w, self._techo_deriva = limite_w, techo
@@ -1005,9 +1028,7 @@ class PanelActitud:
         self._actualizar_textos()
         self._refrescar(grupos)
 
-    # ------------------------------------------------------------- blitting
     def _pintar_cuerpo(self, renderer):
-        """Pinta la vista del cuerpo y devuelve la caja (pixeles) que ocupa."""
         ax = self.ax_cuerpo
         ax.M = ax.get_proj()
         ax.invM = np.linalg.inv(ax.M)
@@ -1021,18 +1042,17 @@ class PanelActitud:
                                  anclas))
         x, y, _ = proj3d.proj_transform(*puntos.T, ax.M)
         pixeles = ax.transData.transform(np.column_stack((x, y)))
-        margen = 8 * renderer.dpi / 100     # grosor de linea + antialiasing
+        margen = 8 * renderer.dpi / 100
         cajas = [Bbox([pixeles.min(axis=0) - margen, pixeles.max(axis=0) + margen])]
         for (rotulo, _), xy in zip(self._anclas, pixeles[-len(anclas):]):
             rotulo.xy = xy
             rotulo.draw(renderer)
             cajas.append(rotulo.caja(renderer.dpi))
-        self.rotulo_volteos.xy = self.fig.transFigure.transform((0.608, 0.895))
+        self.rotulo_volteos.xy = self.fig.transFigure.transform((0.550, 0.895))
         self.rotulo_volteos.draw(renderer)
         return Bbox.union(cajas)
 
     def _pintar_graficas(self, renderer, grupos=TODAS):
-        """Pinta los grupos de graficas indicados y devuelve sus regiones."""
         regiones = []
         for indice in grupos:
             artistas, zonas = self._grupos_graficas[indice]
@@ -1042,11 +1062,6 @@ class PanelActitud:
         return regiones
 
     def _actualizar_fondo(self, *ejes):
-        """Repinta unos Axes opacos dentro del fondo guardado.
-
-        Evita redibujar toda la figura (~0.5 s) solo para cambiar el texto
-        del boton o del estado al iniciar, pausar o terminar.
-        """
         lienzo = self.fig.canvas
         if self._fondo is None or self._completo or not lienzo.supports_blit:
             return
@@ -1068,7 +1083,6 @@ class PanelActitud:
         self._caja_volteos = self.rotulo_volteos.caja(renderer.dpi)
 
     def _refrescar(self, grupos=TODAS):
-        """Repinta con blitting el cuerpo y los grupos de graficas indicados."""
         lienzo = self.fig.canvas
         arrastrado = next((c for c, s in self.sliders.items() if s.drag_active),
                           None)
@@ -1079,12 +1093,8 @@ class PanelActitud:
             return
         lienzo.restore_region(self._fondo)
         renderer = lienzo.get_renderer()
-        # A Tk solo se envian los pixeles que cambian: copiar a pantalla es lo
-        # mas caro de cada fotograma y cuesta en proporcion al area.
         regiones = []
         if arrastrado is not None:
-            # Mientras se arrastra solo se repinta el deslizador; el resto de
-            # la figura se actualiza al soltar (ver _soltar).
             slider = self.sliders[arrastrado]
             caja_valor = self._valores[arrastrado][0]
             slider.label.set_visible(False)
@@ -1093,8 +1103,6 @@ class PanelActitud:
             self.fig.draw_artist(caja_valor)
             regiones += [slider.ax.bbox, caja_valor.bbox]
 
-        # Cuerpo: zona que ocupaba antes (para borrarlo) union la que ocupa
-        # ahora. Al girar la camara se mueven las referencias: toda la tarjeta.
         caja = self._pintar_cuerpo(renderer)
         if self._camara is not None or self._caja_cuerpo is None:
             region = self._region_cuerpo
