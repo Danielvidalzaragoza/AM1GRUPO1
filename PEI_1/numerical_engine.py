@@ -1,31 +1,81 @@
+"""Esquemas temporales y estimación de error para el problema de Cauchy."""
+
 import numpy as np
-from numpy import array
 from numpy.linalg import norm
 from typing import Callable
 
-from Milestone_3 import Integradores
+if __package__:
+    from .space_physics import estabilidad
+else:
+    from space_physics import estabilidad
 
-def partition(t0: float, tf: float, N: float):
-    # Crea una partición del intervalo [t0, tf] en N subintervalos equiespaciados.
-    return np.array([t0 + i * (tf - t0) / N for i in range(N + 1)])
 
-def sol_error_cauchy(
+def EE(U: np.ndarray, At: float, t: float, F: Callable[[np.ndarray, float], np.ndarray]):
+    return U + At * F(U, t)
+
+
+def EI(U: np.ndarray, At: float, t: float, F: Callable[[np.ndarray, float], np.ndarray], J: Callable[[np.ndarray, float], np.ndarray] = None):
+    Y = U + At * F(U, t)
+    for _ in range(50):
+        R = Y - U - At * F(Y, t + At)
+        if norm(R) <= 1e-10:
+            return Y
+        if J is not None:
+            mat_J = np.eye(len(U)) - At * J(Y, t + At)
+        else:
+            n = len(U)
+            mat_J = np.eye(n)
+            h_jac = 1e-8
+            for i in range(n):
+                U_plus = Y.copy()
+                U_plus[i] += h_jac
+                mat_J[:, i] -= At * (F(U_plus, t + At) - F(Y, t + At)) / h_jac
+        Y = Y - np.linalg.solve(mat_J, R)
+    return Y
+
+
+def CN(U: np.ndarray, At: float, t: float, F: Callable[[np.ndarray, float], np.ndarray], J: Callable[[np.ndarray, float], np.ndarray] = None):
+    def G(X: np.ndarray, time: float):
+        return (F(U, t) + F(X, time)) / 2
+    def JG(X: np.ndarray, time: float):
+        if J is not None:
+            return J(X, time) / 2
+        return None
+    return EI(U, At, t, G, JG)
+
+
+def RK4(U: np.ndarray, At: float, t: float, F: Callable[[np.ndarray, float], np.ndarray]):
+    k1 = F(U, t)
+    k2 = F(U + At * k1 / 2, t + At / 2)
+    k3 = F(U + At * k2 / 2, t + At / 2)
+    k4 = F(U + At * k3, t + At)
+    return U + At * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+
+
+def LF(U: np.ndarray, At: float, t: float, F: Callable[[np.ndarray, float], np.ndarray], U_prev: np.ndarray):
+    return U_prev + 2 * At * F(U, t)
+
+
+def paso_Cauchy(
     esquema: str,
-    U0: np.ndarray,
-    N_t: int,
-    t0: float,
-    tf: float,
+    U: np.ndarray,
+    U_prev: np.ndarray,
+    At: float,
+    t: float,
     F: Callable[[np.ndarray, float], np.ndarray],
+    J: Callable[[np.ndarray, float], np.ndarray] = None,
 ):
-    coarse = integrar_Cauchy(esquema, U0, N_t, t0, tf, F)
-    fine = integrar_Cauchy(esquema, U0, 2 * N_t, t0, tf, F)
-    finer = integrar_Cauchy(esquema, U0, 4 * N_t, t0, tf, F)
-
-    difference_coarse_fine = np.linalg.norm(coarse - fine[::2])
-    difference_fine_finer = np.linalg.norm(fine[::2] - finer[::4])
-    orden = np.log(difference_coarse_fine / difference_fine_finer) / np.log(2)
-    error = error_richardson(coarse, fine[::2], orden)
-    return coarse, error, orden
+    if esquema == "EE":
+        return EE(U, At, t, F)
+    elif esquema == "EI":
+        return EI(U, At, t, F, J)
+    elif esquema == "CN":
+        return CN(U, At, t, F, J)
+    elif esquema == "RK4":
+        return RK4(U, At, t, F)
+    elif esquema == "LF":
+        return LF(U, At, t, F, U_prev)
+    return EE(U, At, t, F)
 
 
 def integrar_Cauchy(
@@ -35,102 +85,117 @@ def integrar_Cauchy(
     t0: float,
     tf: float,
     F: Callable[[np.ndarray, float], np.ndarray],
+    J: Callable[[np.ndarray, float], np.ndarray] = None,
 ):
-    metodos = {"EE": EE, "EI": EI, "CN": CN, "RK4": RK4, "LF": LF}
     U = np.zeros((N_t + 1, len(U0)))
-    U[0, :] = U0
-    t = partition(t0, tf, N_t)
-    metodo = metodos[esquema]
+    t = np.linspace(t0, tf, N_t + 1)
+    U[0] = U0
+    At = t[1] - t[0]
+
     if esquema == "LF":
-        # Para el esquema Leapfrog, necesitamos un paso inicial con otro método.
-        U[1, :] = EE(U[0, :], t[1] - t[0], t[0], F)
+        U[1] = RK4(U[0], At, t[0], F)
         for n in range(1, N_t):
-            U[n + 1, :] = metodo(U[n, :], t[n + 1] - t[n], t[n], F, U[n - 1, :])
+            U[n + 1] = paso_Cauchy(esquema, U[n], U[n - 1], At, t[n], F, J)
     else:
         for n in range(N_t):
-            U[n + 1, :] = metodo(U[n, :], t[n + 1] - t[n], t[n], F)
-    return U
+            U[n + 1] = paso_Cauchy(esquema, U[n], None, At, t[n], F, J)
+    return t, U
 
 
-''' Cálculo del error temporal mediante extrapolación de Richardson.
-'''
-def error_richardson(
-    coarse: np.ndarray,
-    fine: np.ndarray,
-    order: float,
-) -> np.ndarray:
-    """
-    Estima el error de la aproximación fina mediante extrapolación de Richardson.
-    `coarse` y `fine` deben representar la misma magnitud en los mismos tiempos,
-    calculada con pasos h y h/n, respectivamente.
-    """
-    return (coarse - fine) / (2**order - 1)
+def converge_sys(esquema: str, U0: np.ndarray, t_i: float, t_f: float, F, J=None):
+    pasos = np.logspace(0, 5, num=10, dtype=int)
+    error_final = np.zeros(len(pasos))
+    for indice, n in enumerate(pasos):
+        _, coarse = integrar_Cauchy(esquema, U0, int(n), t_i, t_f, F, J)
+        _, fine = integrar_Cauchy(esquema, U0, int(2 * n), t_i, t_f, F, J)
+        error_final[indice] = norm(coarse[-1] - fine[-1])
 
-''' Esquemas temporales para la integración de ecuaciones diferenciales ordinarias (EDO)
-    -Euler Explícito- EE
-    -Euler Implícito- EI
-    -Crank-Nicolson- CN
-    -Runge-Kutta de 4to orden- RK4
-'''
-def EE(U:array, At:float, t:float, F:Callable[[array,float], array]):
-    return U + At * F(U, t)
+    escala = max(norm(U0), 1.0)
+    limite_redondeo = 10 * np.finfo(float).eps * pasos * escala
+    ajuste = (pasos >= 20) & (error_final > limite_redondeo)
 
-def EI(U:array, At:float, t:float, F:Callable[[array,float], array]):
-    # Método de Euler implícito mediante Newton.
-    return My_Newton(U, At, t, F)
+    if np.sum(ajuste) >= 2:
+        pendiente, _ = np.polyfit(np.log(pasos[ajuste]), np.log(error_final[ajuste]), 1)
+        orden = -pendiente
+    else:
+        orden = 1.0
+    return orden
 
+def datos_convergencia(esquema, U0, t0, tf, F, J=None):
+    numeros_pasos = np.array([20, 40, 80, 160, 320,    640, 1280, 2560, 5120])
+    errores = []
+    for N in numeros_pasos:
+        _, solucion_gruesa = integrar_Cauchy(
+            esquema, U0, int(N), t0, tf, F, J
+        )
+        _, solucion_fina = integrar_Cauchy(
+            esquema, U0, int(2 * N), t0, tf, F, J
+        )
+        error = norm(
+            solucion_gruesa[-1] - solucion_fina[-1]
+        )
+        errores.append(error)
 
-def CN(U:array, At:float, t:float, F:Callable[[array,float], array]):
-    # Método de Crank-Nicolson mediante Newton.
-    def G(X:array, time:float):
-        return (F(U, t) + F(X, time)) / 2
-    return My_Newton(U, At, t, G)
+    return numeros_pasos, np.array(errores)
 
+def richardson_error(
+    esquema: str,
+    U0: np.ndarray,
+    N_t: int,
+    t0: float,
+    tf: float,
+    F: Callable[[np.ndarray, float], np.ndarray],
+    J: Callable[[np.ndarray, float], np.ndarray] = None,
+):
+    t_coarse, coarse = integrar_Cauchy(esquema, U0, N_t, t0, tf, F, J)
+    _, fine = integrar_Cauchy(esquema, U0, 2 * N_t, t0, tf, F, J)
+    _, finer = integrar_Cauchy(esquema, U0, 4 * N_t, t0, tf, F, J)
 
-def RK4(U:array, At:float, t:float, F:Callable[[array,float], array]):
-    # Esquema básico de Runge-Kutta de cuarto orden.
-    k1 = F(U, t)
-    k2 = F(U + At * k1 / 2, t + At / 2)
-    k3 = F(U + At * k2 / 2, t + At / 2)
-    k4 = F(U + At * k3, t + At)
-    return U + At * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+    difference_coarse_fine = norm(coarse - fine[::2])
+    difference_fine_finer = norm(fine[::2] - finer[::4])
+    
+    if difference_fine_finer > 1e-15:
+        orden = np.log(max(difference_coarse_fine, 1e-16) / difference_fine_finer) / np.log(2)
+    else:
+        orden = converge_sys(esquema, U0, t0, tf, F, J)
 
-def LF(U:array, At:float, t:float, F:Callable[[array,float], array], U_prev:array):
-    # Esquema Leapfrog (salto de rana) de segundo orden.
-    return U_prev + 2 * At * F(U, t)
+    min_len = min(len(coarse), len(fine[::2]))
+    error = np.zeros_like(coarse)
+    factor = 2**orden - 1
+    if abs(factor) > 1e-8:
+        error[:min_len] = (coarse[:min_len] - fine[::2][:min_len]) / factor
+    else:
+        error[:min_len] = coarse[:min_len] - fine[::2][:min_len]
 
-
-def My_Newton(U:array, At:float, t:float, F:Callable[[array,float], array],
-              tol:float=1e-10, max_iter:int=50):
-    # Método de Newton para resolver ecuaciones no lineales.
-    Y = U + At * F(U, t)
-    for _ in range(max_iter):
-        R = Y - U - At * F(Y, t + At)
-        if norm(R) <= tol:
-            return Y
-        J = np.eye(len(U)) - At * My_Jacobian(F, Y, t + At)
-        Y = Y - np.linalg.solve(J, R)
-
-    raise RuntimeError(f"Newton no convergió en {max_iter} iteraciones.")
-
-
-def My_Gauss_Seidel(F:Callable[[array,float], array], U:array, At:float, t:float):
-    # Método de Gauss-Seidel para resolver ecuaciones no lineales.
-    Y = U + At * F(U, t)
-    while True:
-        Y_new = U + At * F(Y, t + At)
-        if norm(Y_new - Y) < 1e-10:
-            return Y_new
-        Y = Y_new
+    return t_coarse, coarse, error, float(orden)
 
 
-def My_Jacobian(F:Callable[[array,float], array], U:array, t:float):
-    # Aproximación de la matriz jacobiana de F en el punto U.
-    n = len(U)
-    J = np.zeros((n, n))
-    h = 1e-8
-    for i in range(n):
-        U_plus = U.copy()
-        U_plus[i] += h
-        J[:, i] = (F(U_plus, t) - F(U, t)) / h
-    return J
+def stability_report(esquema: str, eigenvalues: np.ndarray, At: float):
+    z = At * np.asarray(eigenvalues)
+    if esquema == "LF":
+        roots = np.stack((z + np.sqrt(1 + z**2), z - np.sqrt(1 + z**2)))
+        maximum = np.max(np.abs(roots))
+    else:
+        maximum = np.max(np.abs(estabilidad(esquema, z)))
+    return maximum <= 1, maximum
+
+
+def obtener_region_estabilidad(esquema: str, resolucion: int = 300):
+    x = np.linspace(-4.0, 2.0, resolucion)
+    y = np.linspace(-3.0, 3.0, resolucion)
+    X, Y = np.meshgrid(x, y)
+    Z = X + 1j * Y
+    R = estabilidad(esquema, Z)
+    return X, Y, np.abs(R)
+
+
+def obtener_todas_regiones_estabilidad(esquemas=("EE", "EI", "CN", "RK4", "LF"), resolucion=200):
+    x = np.linspace(-4.0, 2.0, resolucion)
+    y = np.linspace(-3.0, 3.0, resolucion)
+    X, Y = np.meshgrid(x, y)
+    Z = X + 1j * Y
+    regiones = {}
+    for esq in esquemas:
+        R = estabilidad(esq, Z)
+        regiones[esq] = np.abs(R)
+    return X, Y, regiones
