@@ -126,21 +126,21 @@ def converge_sys(esquema: str, U0: np.ndarray, t_i: float, t_f: float, F, J=None
 def datos_convergencia(esquema, U0, t0, tf, F, J=None):
 
     numeros_pasos = np.array([20, 40, 80, 160, 320])
-    pasos_dt = []
+    numeros_nodos = []
     errores = []
-
     for N in numeros_pasos:
-        
         _, solucion_gruesa = integrar_Cauchy(
-            esquema, U0, int(N), t0, tf, F, J)
+            esquema, U0, int(N), t0, tf, F, J
+        )
         _, solucion_fina = integrar_Cauchy(
-            esquema, U0, int(2 * N), t0, tf, F, J)
-        error = norm(solucion_gruesa[-1] - solucion_fina[-1])
-
-        pasos_dt.append((tf - t0) / N)
+            esquema, U0, int(2 * N), t0, tf, F, J
+        )
+        error = norm(
+            solucion_gruesa[-1] - solucion_fina[-1]
+        )
+        numeros_nodos.append(N + 1)
         errores.append(error)
-
-    return np.array(pasos_dt), np.array(errores)
+    return np.array(numeros_nodos), np.array(errores)
 
 def richardson_error(
     esquema: str,

@@ -464,7 +464,7 @@ class PanelActitud:
         self._estilo_2d(self.ax_convergencia)
         self.ax_convergencia.set_xscale("log")
         self.ax_convergencia.set_yscale("log")
-        self.ax_convergencia.set_xlabel("Δt", fontsize=8)
+        self.ax_convergencia.set_xlabel("Número de nodos", fontsize=8)
         self.ax_convergencia.tick_params(labelsize=7)
 
         
@@ -797,8 +797,6 @@ class PanelActitud:
             )
         self._completo = True
         self._refrescar()
-
-    
     def mostrar_convergencia(self, _=None):
         ax = self.ax_convergencia
         ax.clear()
@@ -813,33 +811,43 @@ class PanelActitud:
             "LF": "#c792ea"
         }
         for esquema in ("EE", "EI", "CN", "RK4", "LF"):
-            dt, errores = datos_convergencia(
-                esquema, self.W0, 0, min(self.tf, 2.0),
-                self.F, self.J
+            nodos, errores = datos_convergencia(
+                esquema,
+                self.W0,
+                0,
+                min(self.tf, 2.0),
+                self.F,
+                self.J
             )
             validos = (
                 np.isfinite(errores)
                 & (errores > 0)
-                & np.isfinite(dt)
-                & (dt > 0)
+                & np.isfinite(nodos)
+                & (nodos > 0)
             )
             if np.count_nonzero(validos) >= 2:
-                x = dt[validos]
+                x = nodos[validos]
                 y = errores[validos]
-
                 pendiente = np.polyfit(
-                    np.log(x), np.log(y), 1
+                    np.log(x),
+                    np.log(y),
+                    1
                 )[0]
+                orden = -pendiente
                 ax.loglog(
-                    x, y, "o-",
+                    x,
+                    y,
+                    "o-",
                     color=colores[esquema],
                     markersize=3,
                     linewidth=1.6,
-                    label=f"{esquema} (p={pendiente:.2f})"
+                    label=f"{esquema} (p={orden:.2f})"
                 )
-        ax.set_xlabel("Δt", fontsize=8, labelpad=1)
+        ax.set_xlabel("Número de nodos", fontsize=8, labelpad=1)
         ax.tick_params(labelsize=7)
-        # Leyenda debajo de la gráfica, en dos filas
+        ax.set_xticks([21, 81, 321])
+        ax.set_xticklabels(["21", "81", "321"], fontsize=6.5)
+        ax.minorticks_off()
         ax.legend(
             fontsize=7,
             frameon=False,
@@ -850,10 +858,6 @@ class PanelActitud:
             handlelength=1.2,
             columnspacing=0.8
         )
-
-
-
-
     def _preparar_fase(self, limite=None):
         I1, I2, I3 = self.I
         semiejes_T = np.sqrt(2 * self.energia0 / self.I)
