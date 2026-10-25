@@ -462,9 +462,8 @@ class PanelActitud:
             (0.812, 0.105, 0.165, 0.095)
         )
         self._estilo_2d(self.ax_convergencia)
-        self.ax_convergencia.set_xscale("log")
-        self.ax_convergencia.set_yscale("log")
-        self.ax_convergencia.set_xlabel("Número de nodos", fontsize=8)
+        self.ax_convergencia.set_xlabel("log(N)", fontsize=8)
+        self.ax_convergencia.set_ylabel("log(E)", fontsize=8)
         self.ax_convergencia.tick_params(labelsize=7)
 
         
@@ -800,9 +799,9 @@ class PanelActitud:
     def mostrar_convergencia(self, _=None):
         ax = self.ax_convergencia
         ax.clear()
+
         self._estilo_2d(ax)
-        ax.set_xscale("log")
-        ax.set_yscale("log")
+
         colores = {
             "EE": "#ff6b6b",
             "EI": "#80ffb4",
@@ -810,8 +809,10 @@ class PanelActitud:
             "RK4": "#ffd166",
             "LF": "#c792ea"
         }
+
         for esquema in ("EE", "EI", "CN", "RK4", "LF"):
-            nodos, errores = datos_convergencia(
+
+            N, errores = datos_convergencia(
                 esquema,
                 self.W0,
                 0,
@@ -819,22 +820,29 @@ class PanelActitud:
                 self.F,
                 self.J
             )
+
             validos = (
                 np.isfinite(errores)
                 & (errores > 0)
-                & np.isfinite(nodos)
-                & (nodos > 0)
+                & np.isfinite(N)
+                & (N > 0)
             )
+
             if np.count_nonzero(validos) >= 2:
-                x = nodos[validos]
-                y = errores[validos]
+
+                x = np.log(N[validos])
+                y = np.log(errores[validos])
+                n_ajuste = min(5, len(x))
+
                 pendiente = np.polyfit(
-                    np.log(x),
-                    np.log(y),
+                    x[:n_ajuste],
+                    y[:n_ajuste],
                     1
                 )[0]
+
                 orden = -pendiente
-                ax.loglog(
+
+                ax.plot(
                     x,
                     y,
                     "o-",
@@ -843,11 +851,11 @@ class PanelActitud:
                     linewidth=1.6,
                     label=f"{esquema} (p={orden:.2f})"
                 )
-        ax.set_xlabel("Número de nodos", fontsize=8, labelpad=1)
+
+        ax.set_xlabel("log(N)", fontsize=8, labelpad=1)
+        ax.set_ylabel("log(E)", fontsize=8, labelpad=1)
         ax.tick_params(labelsize=7)
-        ax.set_xticks([21, 81, 321])
-        ax.set_xticklabels(["21", "81", "321"], fontsize=6.5)
-        ax.minorticks_off()
+
         ax.legend(
             fontsize=7,
             frameon=False,
@@ -858,6 +866,9 @@ class PanelActitud:
             handlelength=1.2,
             columnspacing=0.8
         )
+
+
+        
     def _preparar_fase(self, limite=None):
         I1, I2, I3 = self.I
         semiejes_T = np.sqrt(2 * self.energia0 / self.I)
