@@ -402,23 +402,30 @@ class PanelActitud:
                                            zorder=2)
         for coleccion in (self.malla_T, self.malla_L, self.separatriz):
             ax_f.add_collection3d(coleccion)
-        (self.eq_estables,) = ax_f.plot([], [], [], "o", ms=4, color=BIEN,
-                                      ls="none", zorder=3)
-        (self.eq_inestables,) = ax_f.plot([], [], [], "X", ms=5.5, color=MAL,
-                                        ls="none", zorder=3)
+            
+        (self.eq_estables_1,) = ax_f.plot([], [], [], "o", ms=3.0, color=COLOR_EJES[0], ls="none", zorder=3)
+        (self.eq_estables_3,) = ax_f.plot([], [], [], "o", ms=3.0, color=COLOR_EJES[2], ls="none", zorder=3)
+        self.eq_inestables = ax_f.scatter([], [], [], marker="X", s=20, color=MAL, zorder=3)
+        
         (self.trayectoria,) = ax_f.plot([], [], [], color=COLOR_W, lw=1.3,
                                       zorder=4, animated=True)
-        (self.punto,) = ax_f.plot([], [], [], "o", ms=5, color="white",
-                                mec=COLOR_W, mew=1.5, zorder=5, animated=True)
+        (self.punto,) = ax_f.plot([], [], [], "o", ms=4.0, color="white",
+                                mec=COLOR_W, mew=1.2, zorder=5, animated=True)
+                                
+        self.flecha_sep_1 = ax_f.quiver([], [], [], [], [], [], color="#f4f4f8", length=0.15, normalize=True, zorder=4)
+        self.flecha_sep_2 = ax_f.quiver([], [], [], [], [], [], color="#f4f4f8", length=0.15, normalize=True, zorder=4)
         
+        # Leyenda dispuesta estrictamente en 4 columnas compactas para encajar perfectamente dentro de la tarjeta
         ax_f.legend(
             [Line2D([], [], color=COLOR_T), Line2D([], [], color=COLOR_L),
              Line2D([], [], color="#f4f4f8", ls="--"),
-             Line2D([], [], color=BIEN, marker="o", ls="none", ms=4),
-             Line2D([], [], color=MAL, marker="X", ls="none", ms=5)],
-            ["2T", "L²", "separatriz", "centro", "silla"],
-            loc="lower left", bbox_to_anchor=(0.04, -0.06), ncol=5, fontsize=6.5,
-            frameon=False, labelcolor=TEXTO, handlelength=1.0, columnspacing=0.5,
+             Line2D([], [], color=COLOR_EJES[0], marker="o", ls="none", ms=3.0),
+             Line2D([], [], color=COLOR_EJES[2], marker="o", ls="none", ms=3.0),
+             Line2D([], [], color=MAL, marker="X", ls="none", ms=4.0),
+             Line2D([], [], color=COLOR_W, marker="o", ls="none", ms=3.0)],
+            ["2T", "L²", "separatriz", "centro e₁", "centro e₃", "silla e₂", "punto dinámico"],
+            loc="lower center", bbox_to_anchor=(0.5, -0.06), ncol=4, fontsize=5.2,
+            frameon=False, labelcolor=TEXTO, handlelength=0.6, columnspacing=0.4,
         )
 
         ax_s = self.fig.add_axes((0.812, 0.30, 0.165, 0.33))
@@ -435,8 +442,6 @@ class PanelActitud:
         ax_s.set_ylabel("Im(z)", fontsize=6.5, labelpad=1)
         self.ax_stab = ax_s
 
-        
-        
         self._rotulo(0.585, 0.232, "DERIVA DE INVARIANTES")
         self.ax_deriva = self.fig.add_axes(
             (0.605, 0.062, 0.165, 0.142)
@@ -459,7 +464,6 @@ class PanelActitud:
         )
         self.ax_deriva.set_xlabel("t [s]", fontsize=8)
 
-        
         self._rotulo(0.801, 0.232, "CONVERGENCIA DE INTEGRADORES")
         self.ax_convergencia = self.fig.add_axes(
             (0.812, 0.105, 0.165, 0.095)
@@ -469,7 +473,6 @@ class PanelActitud:
         self.ax_convergencia.set_ylabel("log(E)", fontsize=8)
         self.ax_convergencia.tick_params(labelsize=7)
 
-        
         region_fase = TransformedBbox(Bbox.from_bounds(0.570, 0.265, 0.422, 0.41),
                                       self.fig.transFigure)
         self._grupos_graficas = (
@@ -549,7 +552,6 @@ class PanelActitud:
             (0.012, 0.065, 0.155, 0.045), "Estimar error (Richardson)",
             CONTROL, CONTROL_HOVER, self.calcular_richardson,
         )
-
 
         self._rotulo(0.190, 0.186, "INERCIA Y VELOCIDAD DE GIRO")
         self._rotulo(0.380, 0.186, "PERTURBACIÓN Y SIMULACIÓN")
@@ -799,6 +801,7 @@ class PanelActitud:
             )
         self._completo = True
         self._refrescar()
+
     def mostrar_convergencia(self, _=None):
         ax = self.ax_convergencia
         ax.clear()
@@ -870,8 +873,6 @@ class PanelActitud:
             columnspacing=0.8
         )
 
-
-        
     def _preparar_fase(self, limite=None):
         I1, I2, I3 = self.I
         semiejes_T = np.sqrt(2 * self.energia0 / self.I)
@@ -881,15 +882,30 @@ class PanelActitud:
         self._limite_fase = limite
         self.malla_T.set_segments(_malla_elipsoide(semiejes_T, limite))
         self.malla_L.set_segments(_malla_elipsoide(semiejes_L, limite))
+        
         if I2 - I1 > 1e-6 and I3 - I2 > 1e-6:
             curva = separatriz(I1, I2, I3, self.energia0)
             self.separatriz.set_segments([curva, curva * [1, 1, -1]])
+            
+            idx1 = len(curva) // 4
+            idx2 = 3 * len(curva) // 4
+            p1, p2 = curva[idx1], curva[idx1 + 2]
+            p3, p4 = curva[idx2], curva[idx2 + 2]
+            
+            self.flecha_sep_1.remove()
+            self.flecha_sep_2.remove()
+            self.flecha_sep_1 = self.ax_fase.quiver(p1[0], p1[1], p1[2], p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2], color="#f4f4f8", length=0.2, normalize=True, zorder=4)
+            self.flecha_sep_2 = self.ax_fase.quiver(p3[0], p3[1], p3[2], p4[0]-p3[0], p4[1]-p3[1], p4[2]-p3[2], color="#f4f4f8", length=0.2, normalize=True, zorder=4)
         else:
             self.separatriz.set_segments([np.zeros((2, 3))])
+
         a1, a2, a3 = np.where(semiejes_T <= limite, semiejes_T, np.nan)
-        self.eq_estables.set_data_3d(np.array([[a1, -a1, 0, 0], [0, 0, 0, 0],
-                                               [0, 0, a3, -a3]]))
-        self.eq_inestables.set_data_3d(np.array([[0, 0], [a2, -a2], [0, 0]]))
+        
+        self.eq_estables_1.set_data_3d(np.array([[a1, -a1], [0, 0], [0, 0]]))
+        self.eq_estables_3.set_data_3d(np.array([[0, 0], [0, 0], [a3, -a3]]))
+        
+        self.eq_inestables._offsets3d = (np.array([0, 0]), np.array([a2, -a2]), np.array([0, 0]))
+        
         self.ax_fase.set(xlim=(-limite, limite), ylim=(-limite, limite),
                          zlim=(-limite, limite))
 
@@ -933,7 +949,7 @@ class PanelActitud:
         self.ax_stab.scatter(z_act.real, z_act.imag, color=COLOR_EJES[self.eje], s=35, zorder=6, marker="o", edgecolor="black", linewidths=1)
 
         handles = [Line2D([0], [0], color=colores_esq[esq], lw=1.5, label=esq) for esq in ("EE", "EI", "CN", "RK4", "LF")]
-        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=5, markeredgecolor="black", markeredgewidth=1, label="Autvalores eje activo"))
+        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=5, markeredgecolor="black", markeredgewidth=1, label="Autovalores eje activo"))
         
         self.ax_stab.legend(handles=handles, loc="lower left", fontsize=5.5, frameon=False, labelcolor=TEXTO, handlelength=1.0, borderaxespad=0.2, ncol=3)
         
@@ -1204,13 +1220,13 @@ class PanelActitud:
             self.fig.draw_artist(caja_valor)
             regiones += [slider.ax.bbox, caja_valor.bbox]
 
-        caja = self._pintar_cuerpo(renderer)
+        cajares = self._pintar_cuerpo(renderer)
         if self._camara is not None or self._caja_cuerpo is None:
             region = self._region_cuerpo
         else:
-            region = Bbox.intersection(Bbox.union([caja, self._caja_cuerpo]),
+            region = Bbox.intersection(Bbox.union([cajares, self._caja_cuerpo]),
                                        self._region_cuerpo)
-        self._caja_cuerpo = caja
+        self._caja_cuerpo = cajares
         if region is not None:
             regiones.append(region)
         volteos = (self.rotulo_volteos.texto, self.rotulo_volteos.color)
