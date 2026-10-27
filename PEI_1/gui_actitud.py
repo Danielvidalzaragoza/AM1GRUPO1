@@ -330,8 +330,11 @@ class PanelActitud:
 
         s = np.linspace(0, 2 * np.pi, 90)
         circulo = np.column_stack((1.25 * np.cos(s), 1.25 * np.sin(s), 0 * s))
+        # Mismo numero de puntos que el circulo: add_collection3d (matplotlib
+        # >= 3.10) convierte los segmentos en un array y falla si difieren.
+        vertical = np.column_stack((0 * s, 0 * s, np.linspace(-1.35, 1.35, len(s))))
         self.referencias = capa(Line3DCollection(
-            [circulo, [(0, 0, -1.35), (0, 0, 1.35)]],
+            [circulo, vertical],
             colors=[(1, 1, 1, 0.13), (1, 1, 1, 0.1)], linewidths=0.8,
             linestyles="--",
         ))
@@ -967,6 +970,9 @@ class PanelActitud:
         )
 
         lam = autovalores[f"I{self.eje + 1}"]
+        # El autovalor 0 (direccion de omega, conservada) da R(0) = 1 en
+        # cualquier esquema y taparia la disipacion de los modos oscilantes.
+        lam = lam[np.abs(lam) > 1e-12]
         _, maximo = stability_report(self.esquema, lam, self.At)
         if np.max(np.abs(lam.real)) > 1e-9:
             juicio, color = "crece (modo inestable)", AVISO
