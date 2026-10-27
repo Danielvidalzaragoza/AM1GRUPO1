@@ -1,4 +1,4 @@
-from array import array
+from numpy import array
 
 def oscilador(U:array, t:float):
     """Ecuación del oscilador armónico simple.
