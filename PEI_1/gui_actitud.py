@@ -341,6 +341,8 @@ class PanelActitud:
         vacio = [np.zeros((2, 3))]
         self.capa_detras = capa(Line3DCollection(vacio, capstyle="round"))
         self.poly = capa(Poly3DCollection(self.cuerpo.caras, linewidths=0))
+        # Calcomanias (p. ej. el titulo del libro): siempre encima del cuerpo.
+        self.poly_calca = capa(Poly3DCollection([np.zeros((3, 3))], linewidths=0))
         self.capa_delante = capa(Line3DCollection(vacio, capstyle="round"))
 
         self.rotulos_ejes = [_Sprite(11) for _ in COLOR_EJES]
@@ -1006,7 +1008,8 @@ class PanelActitud:
     def _dibujar_cuerpo(self):
         M = self.P @ self.R
         vertices = self.caras @ M.T
-        self.poly.set_verts(vertices)
+        calca = self.cuerpo.calca
+        self.poly.set_verts(vertices[~calca])
         self._vertices = vertices.reshape(-1, 3)
 
         azimut = np.radians(self.ax_cuerpo.azim)
@@ -1027,7 +1030,16 @@ class PanelActitud:
         base = self.cuerpo.colores
         rgb = np.clip(base[:, :3] * (0.32 + 0.68 * difusa)[:, None]
                       + 0.28 * brillo[:, None], 0, 1)
-        self.poly.set_facecolor(np.column_stack((rgb, base[:, 3])))
+        colores = np.column_stack((rgb, base[:, 3]))
+        self.poly.set_facecolor(colores[~calca])
+        if calca.any():
+            # Solo se ve la cara exterior (+z local) de las calcomanias.
+            colores[calca & (normales @ vista <= 0), 3] = 0
+            self.poly_calca.set_verts(vertices[calca])
+            self.poly_calca.set_facecolor(colores[calca])
+        else:
+            self.poly_calca.set_verts([np.zeros((3, 3))])
+            self.poly_calca.set_facecolor([(0, 0, 0, 0)])
 
         segmentos, colores, grosores = [], [], []
 
@@ -1141,7 +1153,7 @@ class PanelActitud:
         ax.M = ax.get_proj()
         ax.invM = np.linalg.inv(ax.M)
         for capa in (self.referencias, self.capa_detras, self.poly,
-                     self.capa_delante):
+                     self.poly_calca, self.capa_delante):
             capa.do_3d_projection()
             capa.draw(renderer)
 

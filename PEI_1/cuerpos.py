@@ -8,6 +8,9 @@ sean los ejes principales de inercia minima, intermedia y maxima
 """
 
 import numpy as np
+from matplotlib.font_manager import FontProperties
+from matplotlib.textpath import TextPath
+from matplotlib.transforms import Affine2D
 
 
 def _rgb(color):
@@ -52,6 +55,8 @@ class Pieza:
         rgb = np.atleast_2d(_rgb(color) if isinstance(color, str) else color)
         rgba = np.column_stack((rgb, np.full(len(rgb), alpha)))
         self.colores = np.broadcast_to(rgba, (len(caras), 4)).copy()
+        # Las calcomanias se pintan encima del resto y solo por su cara +z.
+        self.calca = False
 
 
 def caja(dimensiones, centro=(0, 0, 0), rotacion=None, **estilo):
@@ -132,6 +137,73 @@ def aro_eliptico(A, B, ancho, grosor, centro=(0, 0, 0), segmentos=30,
     return piezas
 
 
+def calcomania(poligonos, centro=(0, 0, 0), **estilo):
+    """Calcomania plana sin masa en el plano xy formada por cuadrilateros 2D."""
+    poligonos = np.asarray(poligonos, dtype=float)
+    caras = np.concatenate((poligonos, np.zeros((*poligonos.shape[:2], 1))), axis=2)
+    pieza = Pieza(caras, 0.0, (0, 0, 0), centro, densidad=0.0, **estilo)
+    pieza.calca = True
+    return pieza
+
+
+def trapecios(anillos, solape=0.0):
+    """Descompone en trapecios la region encerrada por `anillos` (par-impar).
+
+    Barrido en y: en cada franja entre dos ordenadas de vertices, las aristas
+    que la cruzan se emparejan de izquierda a derecha. Las franjas contiguas
+    con el mismo par de aristas se unen en un solo trapecio. `solape` los
+    alarga en y (sin prolongar las aristas, que en las curvas casi horizontales
+    se saldrian mucho) para que no se vean costuras entre ellos.
+    """
+    aristas = [(*a, *b) if a[1] < b[1] else (*b, *a)
+               for anillo in anillos for a, b in zip(anillo[:-1], anillo[1:])
+               if a[1] != b[1]]
+    x0, y0, x1, y1 = np.array(aristas).T
+
+    def x_en(arista, y):
+        return x0[arista] + (x1[arista] - x0[arista]) * (y - y0[arista]) \
+            / (y1[arista] - y0[arista])
+
+    def trapecio(izquierda, derecha, ya, yb):
+        return [[x_en(izquierda, ya), ya - solape], [x_en(derecha, ya), ya - solape],
+                [x_en(derecha, yb), yb + solape], [x_en(izquierda, yb), yb + solape]]
+
+    ys = np.unique(np.concatenate((y0, y1)))
+    resultado, abiertos = [], {}
+    for ya, yb in zip(ys[:-1], ys[1:]):
+        medio = (ya + yb) / 2
+        cruzan = np.flatnonzero((y0 < medio) & (y1 > medio))
+        cruzan = cruzan[np.argsort(x_en(cruzan, medio))]
+        pares = set(zip(cruzan[0::2], cruzan[1::2]))
+        for par in list(abiertos):
+            if par not in pares:
+                resultado.append(trapecio(*par, abiertos.pop(par), ya))
+        for par in pares:
+            abiertos.setdefault(par, ya)
+    resultado += [trapecio(*par, ya, ys[-1]) for par, ya in abiertos.items()]
+    return np.array(resultado)
+
+
+def rotulo(texto, centro, alto, ancho_max, solape=0.001):
+    """Cuadrilateros que forman `texto` centrado en `centro`.
+
+    `alto` es el tamano de la fuente; el texto se reduce si no cabe en
+    `ancho_max`.
+    """
+    # Las curvas se aproximan por poligonos con la fuente a tamano grande.
+    tamano = 20
+    trazo = TextPath((0, 0), texto, size=tamano,
+                     prop=FontProperties(family="DejaVu Sans", weight="bold"))
+    caja = trazo.get_extents()
+    escala = min(alto / tamano, ancho_max / caja.width)
+    transformacion = (
+        Affine2D().translate(-caja.x0 - caja.width / 2, -caja.y0 - caja.height / 2)
+        .scale(escala).translate(*centro)
+    )
+    anillos = [transformacion.transform(a) for a in trazo.to_polygons()]
+    return trapecios(anillos, solape)
+
+
 class Cuerpo:
     """Cuerpo rigido: caras normalizadas (radio envolvente 1) e inercia."""
 
@@ -148,6 +220,7 @@ class Cuerpo:
         escala = 1 / np.linalg.norm(caras.reshape(-1, 3), axis=1).max()
         self.caras = caras * escala
         self.colores = np.concatenate([p.colores for p in piezas])
+        self.calca = np.concatenate([np.full(len(p.caras), p.calca) for p in piezas])
         segundo_momento = segundo_momento * escala**2
         # Tensor de inercia por unidad de masa: I = tr(C) Id - C.
         self.inercia = np.trace(segundo_momento) * np.eye(3) - segundo_momento
@@ -259,14 +332,18 @@ def _satelite():
 
 def _libro():
     tapa = "#d1495b"
+    # Franja y titulo dorados, pintados como calcomania sobre la portada.
+    franja = [[[-0.4, 0.115], [0.4, 0.115], [0.4, 0.185], [-0.4, 0.185]]]
+    titulo = [rotulo(texto, (0, y), 0.11, 1.0)
+              for texto, y in (("Ampliación de", 0.0), ("matemáticas 1", -0.16))]
     piezas = [
         caja((1.3, 0.95, 0.03), centro=(0, 0, 0.115), color=tapa),
         caja((1.3, 0.95, 0.03), centro=(0, 0, -0.115), color=tapa),
         caja((1.3, 0.04, 0.26), centro=(0, -0.475, 0), color="#a83246"),
         caja((1.26, 0.92, 0.2), centro=(0, 0.005, 0), color="#f3ead3",
              densidad=0.8),
-        caja((0.8, 0.07, 0.004), centro=(0, 0.15, 0.132), color="#f2c14e",
-             densidad=0.0),
+        calcomania(np.concatenate((franja, *titulo)), centro=(0, 0, 0.13),
+                   color="#f2c14e"),
     ]
     return Cuerpo(
         "Libro",
