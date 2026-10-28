@@ -127,7 +127,7 @@ def integrar_Cauchy(
 
 
 def converge_sys(esquema: str, U0: np.ndarray, t_i: float, t_f: float, F, J=None):
-    pasos = np.geomspace(20, 10_240, num=10, dtype=int)
+    pasos = np.geomspace(20, 7000, num=10, dtype=int)
     error_final = np.zeros(len(pasos))
     for indice, n in enumerate(pasos):
         _, coarse = integrar_Cauchy(esquema, U0, int(n), t_i, t_f, F, J)
