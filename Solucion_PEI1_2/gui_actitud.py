@@ -30,7 +30,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 if __package__:
     from .cuerpos import CATALOGO
-    from .numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad, datos_convergencia
+    from .numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad, converge_sys
     from .space_physics import (
         ecuaciones_rotacion,
         estabilidad_ejes,
@@ -42,7 +42,7 @@ if __package__:
     )
 else:
     from cuerpos import CATALOGO
-    from numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad, datos_convergencia
+    from numerical_engine import RK4, paso_Cauchy, richardson_error, stability_report, obtener_todas_regiones_estabilidad, converge_sys
     from space_physics import (
         ecuaciones_rotacion,
         estabilidad_ejes,
@@ -780,7 +780,7 @@ class PanelActitud:
         self.fig.canvas.flush_events()
         try:
             with np.errstate(all="ignore"):
-                _, _, error, orden = richardson_error(
+                error, orden = richardson_error(
                     self.esquema, self.W0, self.N, 0, self.tf, self.F, self.J
                 )
         except (RuntimeError, np.linalg.LinAlgError):
@@ -818,7 +818,7 @@ class PanelActitud:
 
         for esquema in ("EE", "EI", "CN", "RK4", "LF"):
 
-            N, errores = datos_convergencia(
+            orden, N, errores = converge_sys(
                 esquema,
                 self.W0,
                 0,
@@ -838,15 +838,6 @@ class PanelActitud:
 
                 x = np.log(N[validos])
                 y = np.log(errores[validos])
-                n_ajuste = min(5, len(x))
-
-                pendiente = np.polyfit(
-                    x[:n_ajuste],
-                    y[:n_ajuste],
-                    1
-                )[0]
-
-                orden = -pendiente
 
                 ax.plot(
                     x,

@@ -127,12 +127,12 @@ def integrar_Cauchy(
 
 
 def converge_sys(esquema: str, U0: np.ndarray, t_i: float, t_f: float, F, J=None):
-    pasos = np.logspace(0, 5, num=10, dtype=int)
+    pasos = np.geomspace(20, 10_240, num=10, dtype=int)
     error_final = np.zeros(len(pasos))
     for indice, n in enumerate(pasos):
         _, coarse = integrar_Cauchy(esquema, U0, int(n), t_i, t_f, F, J)
         _, fine = integrar_Cauchy(esquema, U0, int(2 * n), t_i, t_f, F, J)
-        error_final[indice] = norm(coarse[-1] - fine[-1])
+        error_final[indice] = norm(coarse[n] - fine[2*n])
 
     escala = max(norm(U0), 1.0)
     limite_redondeo = 10 * np.finfo(float).eps * pasos * escala
@@ -143,35 +143,14 @@ def converge_sys(esquema: str, U0: np.ndarray, t_i: float, t_f: float, F, J=None
         orden = -pendiente
     else:
         orden = 1.0
-    return orden
+    return orden, pasos, error_final
 
-def datos_convergencia(esquema, U0, t0, tf, F, J=None):
-    numeros_pasos = np.array([20, 40, 80, 160, 320,    640, 1280, 2560, 5120])
-    errores = []
-    for N in numeros_pasos:
-        _, solucion_gruesa = integrar_Cauchy(
-            esquema, U0, int(N), t0, tf, F, J
-        )
-        _, solucion_fina = integrar_Cauchy(
-            esquema, U0, int(2 * N), t0, tf, F, J
-        )
-        error = norm(
-            solucion_gruesa[-1] - solucion_fina[-1]
-        )
-        errores.append(error)
-
-    return numeros_pasos, np.array(errores)
-
-def richardson_error(
-    esquema: str,
-    U0: np.ndarray,
-    N_t: int,
-    t0: float,
-    tf: float,
+def richardson_error(esquema: str,U0: np.ndarray,
+    N_t: int,t0: float,tf: float,
     F: Callable[[np.ndarray, float], np.ndarray],
     J: Callable[[np.ndarray, float], np.ndarray] = None,
 ):
-    t_coarse, coarse = integrar_Cauchy(esquema, U0, N_t, t0, tf, F, J)
+    _, coarse = integrar_Cauchy(esquema, U0, N_t, t0, tf, F, J)
     _, fine = integrar_Cauchy(esquema, U0, 2 * N_t, t0, tf, F, J)
     _, finer = integrar_Cauchy(esquema, U0, 4 * N_t, t0, tf, F, J)
 
@@ -181,17 +160,14 @@ def richardson_error(
     if difference_fine_finer > 1e-15:
         orden = np.log(max(difference_coarse_fine, 1e-16) / difference_fine_finer) / np.log(2)
     else:
-        orden = converge_sys(esquema, U0, t0, tf, F, J)
+        orden, _, _ = converge_sys(esquema, U0, t0, tf, F, J)
 
-    min_len = min(len(coarse), len(fine[::2]))
+    min_len = len(coarse)
     error = np.zeros_like(coarse)
     factor = 2**orden - 1
-    if abs(factor) > 1e-8:
-        error[:min_len] = (coarse[:min_len] - fine[::2][:min_len]) / factor
-    else:
-        error[:min_len] = coarse[:min_len] - fine[::2][:min_len]
-
-    return t_coarse, coarse, error, float(orden)
+    error[:len(coarse)] = (coarse[:len(coarse)] - fine[::2][:len(coarse)]) / factor
+   
+    return  error, float(orden)
 
 
 def stability_report(esquema: str, eigenvalues: np.ndarray, At: float):
