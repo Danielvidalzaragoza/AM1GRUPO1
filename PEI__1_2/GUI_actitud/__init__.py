@@ -1,5 +1,5 @@
 """GUI package for the simulation."""
 
-from .panel import PanelActitud, main
+from .panel import PanelActitud
 
-__all__ = ["PanelActitud", "main"]
+__all__ = ["PanelActitud"]
