@@ -20,8 +20,8 @@ from .cuerpos import CATALOGO
 from .geometry import _alinear_con_z, _cotas_polhodia, _malla_elipsoide
 from .rendering import _Sprite
 from .theme import ACENTO, ALTO, ANCHO, AVISO, BIEN, BORDE, COLOR_EJES, COLOR_L, COLOR_T, COLOR_W, CONTROL, CONTROL_HOVER, EJES, ESQUEMAS, ESTADOS, FONDO, MAL, MONO, SUB, TARJETA, TENUE, TEXTO, TODAS, _aplicar_estilo
-from numerical_engine import (RK4, converge_sys, obtener_todas_regiones_estabilidad, paso_Cauchy, richardson_error, stability_report)
-from space_physics import (ecuaciones_rotacion, estabilidad_ejes, historial_invariantes, invariantes, jacobiano, paso_actitud, separatriz)
+from numerical_engine import (RK4, My_Jacobian, converge_sys, obtener_todas_regiones_estabilidad, paso_Cauchy, richardson_error, stability_report)
+from space_physics import (ecuaciones_rotacion, estabilidad_ejes, historial_invariantes, invariantes, paso_actitud, separatriz)
 
 class PanelActitud:
     def __init__(self):
@@ -533,7 +533,7 @@ class PanelActitud:
         self.t = np.linspace(0, self.tf, self.N + 1)
         self.At = self.t[1] - self.t[0]
         self.F = lambda W, t: ecuaciones_rotacion(W, I1, I2, I3)
-        self.J = lambda W, t: jacobiano(W, I1, I2, I3)
+        self.J = lambda W, t: My_Jacobian(self.F, W, t)
 
         self.U = np.zeros((self.N + 1, 3))
         self.U[0] = self.W0
