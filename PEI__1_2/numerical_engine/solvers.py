@@ -29,12 +29,15 @@ def My_Jacobian(
     U: np.ndarray,
     t: float,
 ) -> np.ndarray:
-    """Aproxima por diferencias finitas el Jacobiano de F respecto a U."""
+    """Aproxima el Jacobiano con diferencias finitas centradas de segundo orden."""
     n = len(U)
     jacobian = np.zeros((n, n))
-    h = 1e-8
+    paso_relativo = np.cbrt(np.finfo(float).eps)
     for i in range(n):
-        U_plus = U.copy()
-        U_plus[i] += h
-        jacobian[:, i] = (F(U_plus, t) - F(U, t)) / h
+        h = paso_relativo * max(1.0, abs(U[i]))
+        U_mas = U.copy()
+        U_menos = U.copy()
+        U_mas[i] += h
+        U_menos[i] -= h
+        jacobian[:, i] = (F(U_mas, t) - F(U_menos, t)) / (2 * h)
     return jacobian
