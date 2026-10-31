@@ -17,11 +17,30 @@ from mpl_toolkits.mplot3d import proj3d
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 from .cuerpos import CATALOGO
-from .geometry import _alinear_con_z, _cotas_polhodia, _malla_elipsoide
+from .desplegable import Desplegable
+from .geometry import _alinear_con_z, _cotas_polhodia, _superficie_elipsoide
 from .rendering import _Sprite
-from .theme import ACENTO, ALTO, ANCHO, AVISO, BIEN, BORDE, COLOR_EJES, COLOR_L, COLOR_T, COLOR_W, CONTROL, CONTROL_HOVER, EJES, ESQUEMAS, ESTADOS, FONDO, MAL, MONO, SUB, TARJETA, TENUE, TEXTO, TODAS, _aplicar_estilo
+from .theme import ACENTO, ALTO, ANCHO, AVISO, BIEN, BORDE, COLOR_EJES, COLOR_L, COLOR_T, COLOR_W, CONTROL, CONTROL_HOVER, EJES, ESQUEMAS, ESTADOS, FONDO, MAL, MONO, SUB, TARJETA, TENUE, TEXTO, _aplicar_estilo
 from numerical_engine import (RK4, My_Jacobian, converge_sys, obtener_todas_regiones_estabilidad, paso_Cauchy, richardson_error, stability_report)
 from space_physics import (ecuaciones_rotacion, estabilidad_ejes, historial_invariantes, invariantes, paso_actitud, separatriz)
+
+VISTAS_DINAMICAS = {
+    "Movimiento del cuerpo": "cuerpo",
+    "Mapa de fases": "fase",
+    "Velocidad angular ω(t)": "omega",
+    "Deriva de invariantes": "deriva",
+}
+
+VISTAS_ESTATICAS = {
+    "Regiones de estabilidad": "estabilidad",
+    "Convergencia de integradores": "convergencia",
+    "Análisis espectral": "espectral",
+}
+
+RECT_DINAMICO = (0.181, 0.218, 0.491, 0.632)
+COLOR_ESQUEMAS = {"EE": "#ff6b6b", "EI": "#80ffb4", "CN": "#4cc9f0",
+                  "RK4": "#ffd166", "LF": "#c792ea"}
+
 
 class PanelActitud:
     def __init__(self):
@@ -32,17 +51,24 @@ class PanelActitud:
         self.esquema = "RK4"
         self.en_marcha = False
         self.estado = "listo"
+        self.vista_dinamica = "cuerpo"
+        self.vista_estatica = "estabilidad"
         self._cargando = False
         self._fondo = None
         self._completo = True
         self._camara = None
-        self._fotograma = 0
         self._caja_cuerpo = None
+        self._regiones = None
+        self._estab_sucio = True
+        self._conv_clave = None
 
         self._crear_marco()
         self._crear_vista_cuerpo()
         self._crear_graficas()
+        self._crear_espectral()
         self._crear_controles()
+        self._crear_desplegables()
+        self._aplicar_vistas()
 
         self.timer = self.fig.canvas.new_timer(interval=1)
         self.timer.add_callback(self._tick)
@@ -109,24 +135,21 @@ class PanelActitud:
             fontsize=8.5, color=TENUE, ha="right", va="center",
         )
         for rect in (
-            (0.008, 0.02, 0.165, 0.895),
-            (0.178, 0.215, 0.380, 0.7),
-            (0.178, 0.02, 0.380, 0.185),
-            (0.570, 0.685, 0.422, 0.23),
-            (0.570, 0.265, 0.204, 0.41),
-            (0.786, 0.265, 0.206, 0.41),
-            (0.570, 0.02, 0.204, 0.235),
-            (0.786, 0.02, 0.206, 0.235),
+            (0.008, 0.02, 0.165, 0.895),   # controles
+            (0.178, 0.215, 0.497, 0.70),   # gráfico dinámico
+            (0.687, 0.215, 0.305, 0.70),   # gráfico estático
+            (0.178, 0.02, 0.814, 0.185),   # parámetros
         ):
             self._tarjeta(*rect)
 
     def _crear_vista_cuerpo(self):
-        rect = (0.181, 0.218, 0.374, 0.694)
+        rect = RECT_DINAMICO
         self._region_cuerpo = TransformedBbox(Bbox.from_bounds(*rect),
                                               self.fig.transFigure)
         cielo = self.fig.add_axes(rect, zorder=0)
         cielo.set_axis_off()
         cielo.set(xlim=(0, 1), ylim=(0, 1))
+        self.cielo = cielo
         azar = np.random.default_rng(3)
         estrellas = 260
         brillo = np.column_stack((
@@ -161,8 +184,6 @@ class PanelActitud:
 
         s = np.linspace(0, 2 * np.pi, 90)
         circulo = np.column_stack((1.25 * np.cos(s), 1.25 * np.sin(s), 0 * s))
-        # Mismo numero de puntos que el circulo: add_collection3d (matplotlib
-        # >= 3.10) convierte los segmentos en un array y falla si difieren.
         vertical = np.column_stack((0 * s, 0 * s, np.linspace(-1.35, 1.35, len(s))))
         self.referencias = capa(Line3DCollection(
             [circulo, vertical],
@@ -172,7 +193,6 @@ class PanelActitud:
         vacio = [np.zeros((2, 3))]
         self.capa_detras = capa(Line3DCollection(vacio, capstyle="round"))
         self.poly = capa(Poly3DCollection(self.cuerpo.caras, linewidths=0))
-        # Calcomanias (p. ej. el titulo del libro): siempre encima del cuerpo.
         self.poly_calca = capa(Poly3DCollection([np.zeros((3, 3))], linewidths=0))
         self.capa_delante = capa(Line3DCollection(vacio, capstyle="round"))
 
@@ -183,136 +203,167 @@ class PanelActitud:
         self.rotulo_L.texto, self.rotulo_L.color = "L", COLOR_L
         self.rotulo_w.texto, self.rotulo_w.color = "ω", COLOR_W
 
-        self.texto_nombre = self.fig.text(0.188, 0.889, "", fontsize=13.5,
+        self.texto_nombre = self.fig.text(0.188, 0.833, "", fontsize=13.5,
                                           fontweight="bold")
-        self.texto_descripcion = self.fig.text(0.188, 0.874, "", fontsize=9,
+        self.texto_descripcion = self.fig.text(0.188, 0.818, "", fontsize=9,
                                                color=TENUE, va="top",
                                                linespacing=1.4)
-        self.texto_aviso = self.fig.text(0.188, 0.818, "", fontsize=9,
+        self.texto_aviso = self.fig.text(0.188, 0.762, "", fontsize=9,
                                          color=AVISO, va="top",
                                          linespacing=1.4)
         self.rotulo_volteos = _Sprite(12, ha="right")
 
     def _crear_graficas(self):
-        self._rotulo(0.585, 0.893, "VELOCIDAD ANGULAR EN EJES CUERPO  ω(t)  [rad/s]")
-        self.ax_w = self.fig.add_axes((0.605, 0.718, 0.368, 0.158))
+        # --- Velocidad angular ω(t) ---
+        self.ax_w = self.fig.add_axes((0.222, 0.285, 0.435, 0.50))
         self._estilo_2d(self.ax_w)
+        self.ax_w.set_xlabel("t [s]", fontsize=9)
+        self.ax_w.set_ylabel("ω [rad/s]", fontsize=9)
+        self.ax_w.tick_params(labelsize=8.5)
         self.lineas_w = [
-            self.ax_w.plot([], [], color=color, lw=1.4, label=f"ω{SUB[k]}",
+            self.ax_w.plot([], [], color=color, lw=1.6, label=f"ω{SUB[k]}",
                            animated=True)[0]
             for k, color in enumerate(COLOR_EJES)
         ]
         self.ax_w.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=3,
-                         fontsize=8, frameon=False, labelcolor=TEXTO,
-                         handlelength=1.2, borderaxespad=0.1)
+                         fontsize=9, frameon=False, labelcolor=TEXTO,
+                         handlelength=1.2, borderaxespad=0.2)
 
-        self._rotulo(0.585, 0.653, "MAPA DE FASES")
-        self._rotulo(0.801, 0.653, "ZONAS DE ESTABILIDAD")
-        
-        ax_f = self.fig.add_axes((0.577, 0.280, 0.190, 0.35), projection="3d",
-                                 computed_zorder=False)
+        # --- Mapa de fases 3D (Maximizado y con zoom/rango adaptado por eje) ---
+        ax_f = self.fig.add_axes((0.180, 0.170, 0.500, 0.69), projection="3d",
+                         computed_zorder=False)
         ax_f.set_facecolor((0, 0, 0, 0))
         for k, (eje, color) in enumerate(zip((ax_f.xaxis, ax_f.yaxis, ax_f.zaxis),
                                              COLOR_EJES)):
             eje.set_pane_color((0.08, 0.12, 0.2, 0.6))
             eje.line.set_color(BORDE)
-            eje.set_major_locator(MaxNLocator(3))
-            eje.set_label_text(f"ω{SUB[k]}", color=color, fontsize=9)
-            eje.labelpad = -8
-        ax_f.tick_params(labelsize=6, colors=TENUE, pad=-2)
-        ax_f.set_box_aspect((1, 1, 1), zoom=0.92)
+            eje.set_major_locator(MaxNLocator(4))
+            eje.set_label_text(f"ω{SUB[k]}", color=color, fontsize=11)
+            eje.labelpad = -4
+        ax_f.tick_params(labelsize=7.5, colors=TENUE, pad=-2)
+        
+        zoom_actual = 0.85
+        ax_f.set_box_aspect((1, 1, 1), zoom=zoom_actual)
         ax_f.view_init(elev=22, azim=-50)
         self.ax_fase = ax_f
 
         vacio = [np.zeros((2, 3))]
-        self.malla_T = Line3DCollection(vacio, colors=[to_rgba(COLOR_T, 0.25)],
-                                        linewidths=0.6, zorder=1)
-        self.malla_L = Line3DCollection(vacio, colors=[to_rgba(COLOR_L, 0.25)],
-                                        linewidths=0.6, zorder=1)
+        self.elipsoide_T = Poly3DCollection([], facecolors=to_rgba(COLOR_T, 0.15),
+                                            edgecolors=to_rgba(COLOR_T, 0.4),
+                                            linewidths=0.5, zorder=1)
+        self.elipsoide_L = Poly3DCollection([], facecolors=to_rgba(COLOR_L, 0.15),
+                                            edgecolors=to_rgba(COLOR_L, 0.4),
+                                            linewidths=0.5, zorder=1)
         self.separatriz = Line3DCollection(vacio,
                                            colors=[to_rgba("#f4f4f8", 0.75)],
                                            linewidths=1.1, linestyles="--",
                                            zorder=2)
-        for coleccion in (self.malla_T, self.malla_L, self.separatriz):
+        for coleccion in (self.elipsoide_T, self.elipsoide_L, self.separatriz):
             ax_f.add_collection3d(coleccion)
-            
-        (self.eq_estables_1,) = ax_f.plot([], [], [], "o", ms=3.0, color=COLOR_EJES[0], ls="none", zorder=3)
-        (self.eq_estables_3,) = ax_f.plot([], [], [], "o", ms=3.0, color=COLOR_EJES[2], ls="none", zorder=3)
-        self.eq_inestables = ax_f.scatter([], [], [], marker="X", s=20, color=MAL, zorder=3)
-        
-        (self.trayectoria,) = ax_f.plot([], [], [], color=COLOR_W, lw=1.3,
+
+        (self.eq_estables_1,) = ax_f.plot([], [], [], "o", ms=4.0, color=COLOR_EJES[0], ls="none", zorder=3)
+        (self.eq_estables_3,) = ax_f.plot([], [], [], "o", ms=4.0, color=COLOR_EJES[2], ls="none", zorder=3)
+        self.eq_inestables = ax_f.scatter([], [], [], marker="X", s=28, color=MAL, zorder=3)
+
+        (self.trayectoria,) = ax_f.plot([], [], [], color=COLOR_W, lw=1.5,
                                       zorder=4, animated=True)
-        (self.punto,) = ax_f.plot([], [], [], "o", ms=4.0, color="white",
+        (self.punto,) = ax_f.plot([], [], [], "o", ms=5.0, color="white",
                                 mec=COLOR_W, mew=1.2, zorder=5, animated=True)
-                                
+
         self.flecha_sep_1 = ax_f.quiver([], [], [], [], [], [], color="#f4f4f8", length=0.15, normalize=True, zorder=4)
         self.flecha_sep_2 = ax_f.quiver([], [], [], [], [], [], color="#f4f4f8", length=0.15, normalize=True, zorder=4)
-        
-        # Leyenda dispuesta estrictamente en 4 columnas compactas para encajar perfectamente dentro de la tarjeta
+
+        # Leyenda colocada en la parte superior del gráfico 3D
         ax_f.legend(
-            [Line2D([], [], color=COLOR_T), Line2D([], [], color=COLOR_L),
+            [Line2D([], [], color=COLOR_T, marker="s", ls="none"), Line2D([], [], color=COLOR_L, marker="s", ls="none"),
              Line2D([], [], color="#f4f4f8", ls="--"),
-             Line2D([], [], color=COLOR_EJES[0], marker="o", ls="none", ms=3.0),
-             Line2D([], [], color=COLOR_EJES[2], marker="o", ls="none", ms=3.0),
-             Line2D([], [], color=MAL, marker="X", ls="none", ms=4.0),
-             Line2D([], [], color=COLOR_W, marker="o", ls="none", ms=3.0)],
+             Line2D([], [], color=COLOR_EJES[0], marker="o", ls="none", ms=4.0),
+             Line2D([], [], color=COLOR_EJES[2], marker="o", ls="none", ms=4.0),
+             Line2D([], [], color=MAL, marker="X", ls="none", ms=5.0),
+             Line2D([], [], color=COLOR_W, marker="o", ls="none", ms=4.0)],
             ["2T", "L²", "separatriz", "centro e₁", "centro e₃", "silla e₂", "punto dinámico"],
-            loc="lower center", bbox_to_anchor=(0.5, -0.06), ncol=4, fontsize=5.2,
-            frameon=False, labelcolor=TEXTO, handlelength=0.6, columnspacing=0.4,
+            loc="upper center", bbox_to_anchor=(0.5, 0.99), ncol=4, fontsize=6.6,
+            frameon=False, labelcolor=TEXTO, handlelength=0.8, columnspacing=0.8,
         )
 
-        ax_s = self.fig.add_axes((0.812, 0.30, 0.165, 0.33))
-        ax_s.set_facecolor(TARJETA)
-        for lado in ("top", "right"):
-            ax_s.spines[lado].set_visible(False)
-        for lado in ("left", "bottom"):
-            ax_s.spines[lado].set_color(BORDE)
-        ax_s.tick_params(labelsize=6.5, colors=TENUE, length=2)
-        ax_s.xaxis.set_major_locator(MaxNLocator(4))
-        ax_s.yaxis.set_major_locator(MaxNLocator(4))
-        ax_s.grid(True, color=BORDE, linewidth=0.5)
-        ax_s.set_xlabel("Re(z)", fontsize=6.5, labelpad=1)
-        ax_s.set_ylabel("Im(z)", fontsize=6.5, labelpad=1)
-        self.ax_stab = ax_s
-
-        self._rotulo(0.585, 0.232, "DERIVA DE INVARIANTES")
-        self.ax_deriva = self.fig.add_axes(
-            (0.605, 0.062, 0.165, 0.142)
-        )
+        # --- Deriva de invariantes ---
+        self.ax_deriva = self.fig.add_axes((0.222, 0.285, 0.435, 0.50))
         self._estilo_2d(self.ax_deriva)
         self.ax_deriva.set_yscale("log")
-
+        self.ax_deriva.tick_params(labelsize=8.5)
         (self.linea_dT,) = self.ax_deriva.plot(
-            [], [], color=COLOR_T, lw=1.5,
+            [], [], color=COLOR_T, lw=1.6,
             label="|ΔT| / T₀", animated=True
         )
         (self.linea_dL,) = self.ax_deriva.plot(
-            [], [], color=COLOR_L, lw=1.5,
+            [], [], color=COLOR_L, lw=1.6,
             label="|ΔL²| / L₀²", animated=True
         )
         self.ax_deriva.legend(
             loc="lower right", bbox_to_anchor=(1.0, 1.0),
-            ncol=2, fontsize=7, frameon=False,
-            labelcolor=TEXTO, handlelength=1.0
+            ncol=2, fontsize=9, frameon=False,
+            labelcolor=TEXTO, handlelength=1.2, borderaxespad=0.2
         )
-        self.ax_deriva.set_xlabel("t [s]", fontsize=8)
+        self.ax_deriva.set_xlabel("t [s]", fontsize=9)
+        self.ax_deriva.set_ylabel("deriva relativa", fontsize=9)
 
-        self._rotulo(0.801, 0.232, "CONVERGENCIA DE INTEGRADORES")
-        self.ax_convergencia = self.fig.add_axes(
-            (0.812, 0.105, 0.165, 0.095)
-        )
+        # --- Regiones de estabilidad |R(z)| ≤ 1 ---
+        ax_s = self.fig.add_axes((0.738, 0.33, 0.235, 0.47))
+        self._estilo_2d(ax_s)
+        self.ax_stab = ax_s
+
+        # --- Convergencia de los integradores ---
+        self.ax_convergencia = self.fig.add_axes((0.742, 0.48, 0.230, 0.32))
         self._estilo_2d(self.ax_convergencia)
-        self.ax_convergencia.set_xlabel("log(N)", fontsize=8)
-        self.ax_convergencia.set_ylabel("log(E)", fontsize=8)
-        self.ax_convergencia.tick_params(labelsize=7)
 
-        region_fase = TransformedBbox(Bbox.from_bounds(0.570, 0.265, 0.422, 0.41),
+        region_fase = TransformedBbox(Bbox.from_bounds(*RECT_DINAMICO),
                                       self.fig.transFigure)
-        self._grupos_graficas = (
-            ([*self.lineas_w, self.texto_reloj], [self.ax_w.bbox, self._region_reloj]),
-            ([self.trayectoria, self.punto], [region_fase]),
-            ([self.linea_dT, self.linea_dL], [self.ax_deriva.bbox]),
-        )
+        self._anim = {
+            "omega": (self.lineas_w, [self.ax_w.bbox]),
+            "fase": ([self.trayectoria, self.punto], [region_fase]),
+            "deriva": ([self.linea_dT, self.linea_dL], [self.ax_deriva.bbox]),
+        }
+
+    def _crear_espectral(self):
+        x0 = 0.700
+        mono = {"fontsize": 9.5, "family": MONO}
+        rotulos = [
+            self._rotulo(x0, 0.800, "LINEALIZACIÓN EN LOS EQUILIBRIOS"),
+            self._rotulo(x0, 0.640, "INVARIANTES"),
+            self._rotulo(x0, 0.515, "ESTABILIDAD NUMÉRICA DEL ESQUEMA"),
+        ]
+        self.filas_eje = []
+        for k in range(3):
+            y = 0.765 - 0.034 * k
+            self.filas_eje.append((
+                self.fig.text(x0, y, "", color=COLOR_EJES[k],
+                              fontweight="bold", **mono),
+                self.fig.text(x0 + 0.028, y, "", **mono),
+                self.fig.text(0.980, y, "", ha="right", **mono),
+            ))
+        self.texto_invariantes = self.fig.text(x0, 0.607, "", **mono)
+        self.texto_cota = self.fig.text(x0, 0.573, "", **mono)
+        self.texto_esquema = self.fig.text(x0, 0.482, "", **mono)
+        self.texto_R = self.fig.text(x0, 0.448, "", **mono)
+
+        self.texto_richardson = self.fig.text(x0, 0.310, "", **mono)
+        self.texto_richardson_2 = self.fig.text(x0, 0.275, "", **mono)
+
+        self._vistas_estaticas = {
+            "estabilidad": [self.ax_stab],
+            "convergencia": [self.ax_convergencia, self.texto_richardson,
+                             self.texto_richardson_2],
+            "espectral": [*rotulos, *(t for fila in self.filas_eje for t in fila),
+                          self.texto_invariantes, self.texto_cota,
+                          self.texto_esquema, self.texto_R],
+        }
+        self._vistas_dinamicas = {
+            "cuerpo": [self.cielo, self.ax_cuerpo, self.texto_nombre,
+                       self.texto_descripcion, self.texto_aviso],
+            "fase": [self.ax_fase],
+            "omega": [self.ax_w],
+            "deriva": [self.ax_deriva],
+        }
 
     def _radio(self, rect, etiquetas, activo, accion):
         ax = self.fig.add_axes(rect)
@@ -348,50 +399,29 @@ class PanelActitud:
     def _crear_controles(self):
         self._rotulo(0.015, 0.893, "CUERPO")
         self.radio_cuerpo = self._radio(
-            (0.010, 0.705, 0.155, 0.18), [c.nombre for c in CATALOGO], 0,
+            (0.010, 0.665, 0.155, 0.220), [c.nombre for c in CATALOGO], 0,
             self.cambiar_cuerpo,
         )
-        self._rotulo(0.015, 0.69, "EJE DE GIRO INICIAL")
-        self.radio_eje = self._radio((0.010, 0.598, 0.155, 0.088), EJES,
+        self._rotulo(0.015, 0.640, "EJE DE GIRO INICIAL")
+        self.radio_eje = self._radio((0.010, 0.525, 0.155, 0.105), EJES,
                                      self.eje, self.cambiar_eje)
-        self._rotulo(0.015, 0.583, "INTEGRADOR")
-        self.radio_esquema = self._radio((0.010, 0.432, 0.155, 0.147),
+        self._rotulo(0.015, 0.500, "INTEGRADOR")
+        self.radio_esquema = self._radio((0.010, 0.315, 0.155, 0.175),
                                          list(ESQUEMAS), 3, self.cambiar_esquema)
 
-        self._rotulo(0.015, 0.412, "ANÁLISIS ESPECTRAL  (linealización)")
-        mono = {"fontsize": 8.0, "family": MONO}
-        self.filas_eje = []
-        for k in range(3):
-            y = 0.385 - 0.024 * k
-            self.filas_eje.append((
-                self.fig.text(0.012, y, "", color=COLOR_EJES[k],
-                              fontweight="bold", **mono),
-                self.fig.text(0.038, y, "", **mono),
-                self.fig.text(0.168, y, "", ha="right", **mono),
-            ))
-        self.texto_invariantes = self.fig.text(0.015, 0.305, "", **mono)
-        self.texto_cota = self.fig.text(0.015, 0.281, "", **mono)
-        self.texto_esquema = self.fig.text(0.015, 0.257, "", **mono)
-        self.texto_R = self.fig.text(0.015, 0.233, "", **mono)
-        self.texto_richardson = self.fig.text(0.015, 0.201, "", **mono)
-        self.texto_richardson_2 = self.fig.text(0.015, 0.177, "", **mono)
-
-        self.boton_marcha = self._boton((0.012, 0.125, 0.075, 0.042), "",
+        self._rotulo(0.015, 0.285, "SIMULACIÓN")
+        self.boton_marcha = self._boton((0.012, 0.200, 0.075, 0.055), "",
                                         ACENTO, "#6aa0ff", self.alternar)
-        self.boton_reinicio = self._boton((0.092, 0.125, 0.075, 0.042),
+        self.boton_reinicio = self._boton((0.092, 0.200, 0.075, 0.055),
                                           "↺  Reiniciar", CONTROL,
                                           CONTROL_HOVER, self.reiniciar)
-        self.boton_richardson = self._boton(
-            (0.012, 0.065, 0.155, 0.045), "Estimar error (Richardson)",
-            CONTROL, CONTROL_HOVER, self.calcular_richardson,
-        )
 
         self._rotulo(0.190, 0.186, "INERCIA Y VELOCIDAD DE GIRO")
-        self._rotulo(0.380, 0.186, "PERTURBACIÓN Y SIMULACIÓN")
+        self._rotulo(0.590, 0.186, "PERTURBACIÓN Y SIMULACIÓN")
         parametros = [
-            ("I1", r"$I_1$", 0.05, 3.0, 1.0, "%.2f"),
-            ("I2", r"$I_2$", 0.05, 3.0, 1.5, "%.2f"),
-            ("I3", r"$I_3$", 0.05, 3.0, 2.0, "%.2f"),
+            ("I1", r"$I_1$", 0.05, 3.0, 0.21, "%.2f"),
+            ("I2", r"$I_2$", 0.05, 3.0, 0.42, "%.2f"),
+            ("I3", r"$I_3$", 0.05, 3.0, 0.58, "%.2f"),
             ("Omega", r"$\Omega$", 0.5, 6.0, 2.5, "%.2f rad/s"),
             ("eps", r"$\varepsilon$", 0.0, 0.2, 0.01, "%.3f"),
             ("dt", r"$\Delta t$", 0.005, 0.05, 0.01, "%.3f s"),
@@ -400,7 +430,7 @@ class PanelActitud:
         ]
         self.sliders, self._valores = {}, {}
         for n, (clave, etiqueta, minimo, maximo, inicial, formato) in enumerate(parametros):
-            x, ancho = (0.210, 0.095) if n < 4 else (0.400, 0.085)
+            x, ancho = (0.215, 0.290) if n < 4 else (0.625, 0.290)
             y = 0.146 - 0.036 * (n % 4)
             ax = self.fig.add_axes((x, y, ancho, 0.022))
             ax.set_facecolor(TARJETA)
@@ -413,23 +443,101 @@ class PanelActitud:
             slider.drawon = False
             slider.label.set(color=TEXTO, fontsize=9.5)
             slider.valtext.set_visible(False)
-            caja = self.fig.add_axes((x + ancho + 0.003, y - 0.002, 0.042, 0.026))
+            caja = self.fig.add_axes((x + ancho + 0.004, y - 0.002, 0.050, 0.026))
             caja.set_facecolor(TARJETA)
             caja.set(xticks=[], yticks=[])
             for lado in caja.spines.values():
                 lado.set_visible(False)
             valor = caja.text(0, 0.5, formato % inicial, va="center",
-                              fontsize=8.0, color=TENUE)
+                              fontsize=8.5, color=TENUE)
             self._valores[clave] = (caja, valor, formato)
-            
+
             if clave == "dt":
                 slider.on_changed(lambda val, clave=clave: self._dt_cambiado(val))
             else:
                 slider.on_changed(lambda val, clave=clave: self._slider_cambiado(clave, val))
-                
+
             self.sliders[clave] = slider
         I1, I2, I3 = (self.sliders[k] for k in ("I1", "I2", "I3"))
         I1.slidermax, I2.slidermin, I2.slidermax, I3.slidermin = I2, I1, I3, I2
+
+    def _crear_desplegables(self):
+        self._rotulo(0.190, 0.903, "GRÁFICO DINÁMICO")
+        self._rotulo(0.699, 0.903, "GRÁFICO ESTÁTICO")
+        self.desp_dinamico = Desplegable(
+            self.fig, (0.188, 0.862, 0.230, 0.030), list(VISTAS_DINAMICAS), 0,
+            self.cambiar_vista_dinamica,
+        )
+        self.desp_estatico = Desplegable(
+            self.fig, (0.697, 0.862, 0.285, 0.030), list(VISTAS_ESTATICAS), 0,
+            self.cambiar_vista_estatica,
+        )
+        self.desplegables = (self.desp_dinamico, self.desp_estatico)
+
+    def _aplicar_vistas(self):
+        for vistas, activa in ((self._vistas_dinamicas, self.vista_dinamica),
+                               (self._vistas_estaticas, self.vista_estatica)):
+            for clave, artistas in vistas.items():
+                for artista in artistas:
+                    artista.set_visible(clave == activa)
+
+    def cambiar_vista_dinamica(self, etiqueta):
+        self.vista_dinamica = VISTAS_DINAMICAS[etiqueta]
+        self._aplicar_vistas()
+        self._completo = True
+        self._dibujar(todas=True)
+
+    def cambiar_vista_estatica(self, etiqueta):
+        self.vista_estatica = VISTAS_ESTATICAS[etiqueta]
+        self._aplicar_vistas()
+        if self.vista_estatica == "estabilidad" and self._estab_sucio:
+            self._actualizar_estabilidad_plot()
+        elif (self.vista_estatica == "convergencia"
+              and self._conv_clave != self._clave_convergencia()):
+            self.mostrar_convergencia()
+        self._completo = True
+        self._refrescar()
+
+    def _cerrar_desplegables(self):
+        cerrado = False
+        for d in self.desplegables:
+            if d.abierto:
+                d.cerrar()
+                cerrado = True
+        if cerrado:
+            self._completo = True
+            self._refrescar()
+        return cerrado
+
+    def _clic_desplegable(self, evento):
+        if evento.button != 1:
+            return False
+        for d in self.desplegables:
+            fila = d.fila_en(evento)
+            if fila is not None:
+                d.elegir(fila)
+                return True
+        for d in self.desplegables:
+            if evento.inaxes is d.ax:
+                estaba_abierto = d.abierto
+                self._cerrar_desplegables()
+                if not estaba_abierto:
+                    d.abrir()
+                    self._completo = True
+                    self._refrescar()
+                return True
+        self._cerrar_desplegables()
+        return False
+
+    def _resaltar_desplegable(self, evento):
+        for d in self.desplegables:
+            if d.abierto and d.resaltar(d.fila_en(evento)):
+                lienzo = self.fig.canvas
+                if self._fondo is None or not lienzo.supports_blit:
+                    lienzo.draw_idle()
+                else:
+                    self.fig.draw_artist(d.ax_lista)
+                    lienzo.blit(d.ax_lista.bbox)
 
     def cambiar_cuerpo(self, nombre):
         self.cuerpo = next(c for c in CATALOGO if c.nombre == nombre)
@@ -481,13 +589,18 @@ class PanelActitud:
     def _tecla(self, evento):
         if evento.key == " ":
             self.alternar()
+        elif evento.key == "escape":
+            self._cerrar_desplegables()
 
     def _presionar(self, evento):
+        if self._clic_desplegable(evento):
+            return
         if evento.inaxes is self.ax_cuerpo and evento.button == 1:
             self._camara = (evento.x, evento.y, self.ax_cuerpo.azim,
                             self.ax_cuerpo.elev)
 
     def _mover(self, evento):
+        self._resaltar_desplegable(evento)
         if self._camara is None or evento.x is None:
             return
         x0, y0, azimut, elevacion = self._camara
@@ -497,7 +610,7 @@ class PanelActitud:
             azim=azimut - 180 * (evento.x - x0) / caja.width,
         )
         self._dibujar_cuerpo()
-        self._refrescar(grupos=())
+        self._refrescar(graficas=False)
 
     def _soltar(self, _):
         self._camara = None
@@ -512,7 +625,9 @@ class PanelActitud:
         else:
             if self.n >= self.N or self.estado == "diverge":
                 self.reiniciar()
-            self.mostrar_convergencia()
+            if (self.vista_estatica == "convergencia"
+                    and self._conv_clave != self._clave_convergencia()):
+                self.mostrar_convergencia()
             self.en_marcha = True
             self.estado = "marcha"
             self._reloj = time.perf_counter()
@@ -554,8 +669,9 @@ class PanelActitud:
         self._preparar_fase()
         self._actualizar_analisis()
         self._actualizar_estabilidad_plot()
+        self._marcar_convergencia_obsoleta()
         self._completo = True
-        self._dibujar()
+        self._dibujar(todas=True)
 
     def _avanzar(self):
         n = self.n
@@ -601,12 +717,9 @@ class PanelActitud:
             self.en_marcha = False
             self.timer.stop()
             self.estado = "completado"
-        self._fotograma += 1
-        self._dibujar(grupos=(self._fotograma % 3,) if self.en_marcha else TODAS)
+        self._dibujar()
 
-    def calcular_richardson(self, _=None):
-        if self.en_marcha:
-            self.alternar()
+    def calcular_richardson(self):
         self.texto_richardson.set(text="Richardson: calculando…", color=TENUE)
         self.texto_richardson_2.set_text("")
         self.fig.canvas.draw()
@@ -632,25 +745,32 @@ class PanelActitud:
             self.texto_richardson_2.set(
                 text="(solución estacionaria o esquema divergente)", color=TENUE
             )
-        self._completo = True
-        self._refrescar()
+
+    def _clave_convergencia(self):
+        return (tuple(self.I), tuple(self.W0), self.tf)
+
+    def _marcar_convergencia_obsoleta(self):
+        if self._conv_clave is None:
+            return
+        if self._conv_clave != self._clave_convergencia():
+            self.ax_convergencia.set_title(
+                "⟳ parámetros cambiados: se recalcula al iniciar",
+                fontsize=8, color=AVISO, pad=6)
+        else:
+            self.ax_convergencia.set_title("")
 
     def mostrar_convergencia(self, _=None):
         ax = self.ax_convergencia
         ax.clear()
-
+        self._estilo_2d(ax)
+        ax.text(0.5, 0.5, "calculando convergencia…", transform=ax.transAxes, ha="center",
+                va="center", color=TENUE, fontsize=10)
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+        ax.clear()
         self._estilo_2d(ax)
 
-        colores = {
-            "EE": "#ff6b6b",
-            "EI": "#80ffb4",
-            "CN": "#4cc9f0",
-            "RK4": "#ffd166",
-            "LF": "#c792ea"
-        }
-
         for esquema in ("EE", "EI", "CN", "RK4", "LF"):
-
             orden, N, errores = converge_sys(
                 esquema,
                 self.W0,
@@ -659,63 +779,62 @@ class PanelActitud:
                 self.F,
                 self.J
             )
-
             validos = (
                 np.isfinite(errores)
                 & (errores > 0)
                 & np.isfinite(N)
                 & (N > 0)
             )
-
             if np.count_nonzero(validos) >= 2:
-
                 x = np.log(N[validos])
                 y = np.log(errores[validos])
-
                 ax.plot(
-                    x,
-                    y,
-                    "o-",
-                    color=colores[esquema],
-                    markersize=3,
-                    linewidth=1.6,
+                    x, y, "o-",
+                    color=COLOR_ESQUEMAS[esquema],
+                    markersize=4, linewidth=1.8,
                     label=f"{esquema} (p={orden:.2f})"
                 )
 
-        ax.set_xlabel("log(N)", fontsize=8, labelpad=1)
-        ax.set_ylabel("log(E)", fontsize=8, labelpad=1)
-        ax.tick_params(labelsize=7)
+        ax.set_xlabel("log(N)", fontsize=9, labelpad=2)
+        ax.set_ylabel("log(E)", fontsize=9, labelpad=2)
+        ax.tick_params(labelsize=8.5)
 
         ax.legend(
-            fontsize=7,
+            fontsize=8,
             frameon=False,
             labelcolor=TEXTO,
             ncol=3,
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.32),
+            bbox_to_anchor=(0.5, -0.17),
             handlelength=1.2,
-            columnspacing=0.8
+            columnspacing=0.9
         )
+        self._conv_clave = self._clave_convergencia()
+        self.calcular_richardson()
+        self._aplicar_vistas()
+        self._completo = True
 
     def _preparar_fase(self, limite=None):
         I1, I2, I3 = self.I
         semiejes_T = np.sqrt(2 * self.energia0 / self.I)
         semiejes_L = np.sqrt(self.momento0) / self.I
         if limite is None:
-            limite = 1.3 * _cotas_polhodia(self.I, self.energia0, self.momento0).max()
+            factor_limite = 1.3 if self.eje == 0 else 3.2
+            limite = factor_limite * _cotas_polhodia(self.I, self.energia0, self.momento0).max()
         self._limite_fase = limite
-        self.malla_T.set_segments(_malla_elipsoide(semiejes_T, limite))
-        self.malla_L.set_segments(_malla_elipsoide(semiejes_L, limite))
         
+        self.elipsoide_T.set_verts(_superficie_elipsoide(semiejes_T, limite))
+        self.elipsoide_L.set_verts(_superficie_elipsoide(semiejes_L, limite))
+
         if I2 - I1 > 1e-6 and I3 - I2 > 1e-6:
             curva = separatriz(I1, I2, I3, self.energia0)
             self.separatriz.set_segments([curva, curva * [1, 1, -1]])
-            
+
             idx1 = len(curva) // 4
             idx2 = 3 * len(curva) // 4
             p1, p2 = curva[idx1], curva[idx1 + 2]
             p3, p4 = curva[idx2], curva[idx2 + 2]
-            
+
             self.flecha_sep_1.remove()
             self.flecha_sep_2.remove()
             self.flecha_sep_1 = self.ax_fase.quiver(p1[0], p1[1], p1[2], p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2], color="#f4f4f8", length=0.2, normalize=True, zorder=4)
@@ -724,63 +843,64 @@ class PanelActitud:
             self.separatriz.set_segments([np.zeros((2, 3))])
 
         a1, a2, a3 = np.where(semiejes_T <= limite, semiejes_T, np.nan)
-        
+
         self.eq_estables_1.set_data_3d(np.array([[a1, -a1], [0, 0], [0, 0]]))
         self.eq_estables_3.set_data_3d(np.array([[0, 0], [0, 0], [a3, -a3]]))
-        
         self.eq_inestables._offsets3d = (np.array([0, 0]), np.array([a2, -a2]), np.array([0, 0]))
-        
-        self.ax_fase.set(xlim=(-limite, limite), ylim=(-limite, limite),
-                         zlim=(-limite, limite))
 
+        self.ax_fase.set(xlim=(-limite, limite), ylim=(-limite, limite), zlim=(-limite, limite))
+        
+        zoom_actual = 0.85 if self.eje == 0 else 0.85
+        self.ax_fase.set_box_aspect((1, 1, 1), zoom=zoom_actual)
         self._limite_w = 1.15 * np.max(np.minimum(semiejes_T, semiejes_L))
         self.ax_w.set(xlim=(0, self.tf), ylim=(-self._limite_w, self._limite_w))
         self._techo_deriva = 1e-12
         self.ax_deriva.set(xlim=(0, self.tf), ylim=(1e-16, self._techo_deriva))
 
     def _actualizar_estabilidad_plot(self):
-        self.ax_stab.clear()
-        self.ax_stab.set_facecolor(TARJETA)
+        if self.vista_estatica != "estabilidad":
+            self._estab_sucio = True
+            return
+        self._estab_sucio = False
+        ax = self.ax_stab
+        ax.clear()
+        ax.set_facecolor(TARJETA)
         for lado in ("top", "right"):
-            self.ax_stab.spines[lado].set_visible(False)
+            ax.spines[lado].set_visible(False)
         for lado in ("left", "bottom"):
-            self.ax_stab.spines[lado].set_color(BORDE)
-        self.ax_stab.tick_params(labelsize=6.5, colors=TENUE, length=2)
-        self.ax_stab.xaxis.set_major_locator(MaxNLocator(4))
-        self.ax_stab.yaxis.set_major_locator(MaxNLocator(4))
-        self.ax_stab.grid(True, color=BORDE, linewidth=0.5)
+            ax.spines[lado].set_color(BORDE)
+        ax.tick_params(labelsize=8.5, colors=TENUE, length=2)
+        ax.xaxis.set_major_locator(MaxNLocator(5))
+        ax.yaxis.set_major_locator(MaxNLocator(5))
+        ax.grid(True, color=BORDE, linewidth=0.5)
 
-        X, Y, regiones = obtener_todas_regiones_estabilidad()
-        colores_esq = {
-            "EE": "#ff6b6b",
-            "EI": "#80ffb4",
-            "CN": "#4cc9f0",
-            "RK4": "#ffd166",
-            "LF": "#c792ea"
-        }
+        if self._regiones is None:
+            self._regiones = obtener_todas_regiones_estabilidad()
+        X, Y, regiones = self._regiones
 
         for esq, limite in regiones.items():
-            color = colores_esq.get(esq, "#ffffff")
-            self.ax_stab.contourf(X, Y, limite, levels=[0, 1.0], colors=[color], alpha=0.10)
-            self.ax_stab.contour(X, Y, limite, levels=[1.0], colors=[color], linewidths=1.2)
+            color = COLOR_ESQUEMAS.get(esq, "#ffffff")
+            ax.contourf(X, Y, limite, levels=[0, 1.0], colors=[color], alpha=0.10)
+            ax.contour(X, Y, limite, levels=[1.0], colors=[color], linewidths=1.4)
 
-        self.ax_stab.axhline(0, color=BORDE, linewidth=0.8)
-        self.ax_stab.axvline(0, color=BORDE, linewidth=0.8)
+        ax.axhline(0, color=BORDE, linewidth=0.8)
+        ax.axvline(0, color=BORDE, linewidth=0.8)
 
         _, _, autovalores = estabilidad_ejes(self.I[0], self.I[1], self.I[2], self.Omega)
         lam_act = autovalores[f"I{self.eje + 1}"]
         z_act = self.At * lam_act
-        self.ax_stab.scatter(z_act.real, z_act.imag, color=COLOR_EJES[self.eje], s=35, zorder=6, marker="o", edgecolor="black", linewidths=1)
+        ax.scatter(z_act.real, z_act.imag, color=COLOR_EJES[self.eje], s=45, zorder=6, marker="o", edgecolor="black", linewidths=1)
 
-        handles = [Line2D([0], [0], color=colores_esq[esq], lw=1.5, label=esq) for esq in ("EE", "EI", "CN", "RK4", "LF")]
-        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=5, markeredgecolor="black", markeredgewidth=1, label="Autovalores eje activo"))
-        
-        self.ax_stab.legend(handles=handles, loc="lower left", fontsize=5.5, frameon=False, labelcolor=TEXTO, handlelength=1.0, borderaxespad=0.2, ncol=3)
-        
-        self.ax_stab.set_xlim(-3.2, 0.8)
-        self.ax_stab.set_ylim(-1.8, 2.3)
-        self.ax_stab.set_xlabel("Re(z)", fontsize=6.5, labelpad=1)
-        self.ax_stab.set_ylabel("Im(z)", fontsize=6.5, labelpad=1)
+        handles = [Line2D([0], [0], color=COLOR_ESQUEMAS[esq], lw=1.6, label=esq) for esq in ("EE", "EI", "CN", "RK4", "LF")]
+        handles.append(Line2D([0], [0], color=COLOR_EJES[self.eje], marker="o", ls="none", ms=6, markeredgecolor="black", markeredgewidth=1, label="Δt·λ del eje activo"))
+
+        ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.11), fontsize=8, frameon=False, labelcolor=TEXTO, handlelength=1.2, columnspacing=1.0, ncol=3)
+
+        ax.set_xlim(-3.2, 0.8)
+        ax.set_ylim(-1.8, 2.3)
+        ax.set_xlabel("Re(z)", fontsize=9, labelpad=2)
+        ax.set_ylabel("Im(z)", fontsize=9, labelpad=2)
+        self._aplicar_vistas()
 
     def _actualizar_analisis(self):
         I1, I2, I3 = self.I
@@ -810,8 +930,6 @@ class PanelActitud:
         )
 
         lam = autovalores[f"I{self.eje + 1}"]
-        # El autovalor 0 (direccion de omega, conservada) da R(0) = 1 en
-        # cualquier esquema y taparia la disipacion de los modos oscilantes.
         lam = lam[np.abs(lam) > 1e-12]
         if lam.size:
             _, maximo = stability_report(self.esquema, lam, self.At)
@@ -829,10 +947,7 @@ class PanelActitud:
             text=f"{self.esquema} en e{SUB[self.eje]}:  |R(Δt·λ)|max", color=TEXTO
         )
         self.texto_R.set(text=f"  = {maximo:.6f}  → {juicio}", color=color)
-        self.texto_richardson.set(text="Richardson: pulsa el botón inferior",
-                                  color=TENUE)
-        self.texto_richardson_2.set_text("")
-
+        
         self.texto_nombre.set_text(self.cuerpo.nombre)
         self.texto_descripcion.set_text(textwrap.fill(self.cuerpo.descripcion, 40))
         self.texto_aviso.set_text("" if self.realizable else textwrap.fill(
@@ -867,7 +982,6 @@ class PanelActitud:
         colores = np.column_stack((rgb, base[:, 3]))
         self.poly.set_facecolor(colores[~calca])
         if calca.any():
-            # Solo se ve la cara exterior (+z local) de las calcomanias.
             colores[calca & (normales @ vista <= 0), 3] = 0
             self.poly_calca.set_verts(vertices[calca])
             self.poly_calca.set_facecolor(colores[calca])
@@ -926,33 +1040,39 @@ class PanelActitud:
                 capa.set_color([(0, 0, 0, 0)])
         self._segmentos = segmentos
 
-    def _actualizar_graficas(self):
+    def _actualizar_graficas(self, todas=False):
+        vista = self.vista_dinamica
         n = self.n
         indices = np.r_[np.arange(0, n, max(1, n // 2500)), n]
         tiempos, estados = self.t[indices], self.U[indices]
-        for k, linea in enumerate(self.lineas_w):
-            linea.set_data(tiempos, estados[:, k])
-        pico = np.abs(estados).max()
-        if pico > self._limite_w:
-            self._limite_w = 1.2 * pico
-            self.ax_w.set_ylim(-self._limite_w, self._limite_w)
-            self._completo = True
 
-        energia, momento = historial_invariantes(estados, *self.I)
-        deriva_T = np.maximum(np.abs(energia / self.energia0 - 1), 1e-16)
-        deriva_L = np.maximum(np.abs(momento / self.momento0 - 1), 1e-16)
-        self.linea_dT.set_data(tiempos, deriva_T)
-        self.linea_dL.set_data(tiempos, deriva_L)
-        peor = max(deriva_T.max(), deriva_L.max())
-        if peor > self._techo_deriva:
-            self._techo_deriva = 10.0 ** (np.ceil(np.log10(peor)) + 1)
-            self.ax_deriva.set_ylim(1e-16, self._techo_deriva)
-            self._completo = True
+        if todas or vista == "omega":
+            for k, linea in enumerate(self.lineas_w):
+                linea.set_data(tiempos, estados[:, k])
+            pico = np.abs(estados).max()
+            if pico > self._limite_w:
+                self._limite_w = 1.2 * pico
+                self.ax_w.set_ylim(-self._limite_w, self._limite_w)
+                self._completo = True
 
-        self.trayectoria.set_data_3d(estados.T)
-        self.punto.set_data_3d(estados[-1:].T)
-        if np.abs(estados[-1]).max() > self._limite_fase:
-            self._preparar_fase_ampliada(1.3 * np.abs(estados[-1]).max())
+        if todas or vista == "deriva":
+            energia, momento = historial_invariantes(estados, *self.I)
+            deriva_T = np.maximum(np.abs(energia / self.energia0 - 1), 1e-16)
+            deriva_L = np.maximum(np.abs(momento / self.momento0 - 1), 1e-16)
+            self.linea_dT.set_data(tiempos, deriva_T)
+            self.linea_dL.set_data(tiempos, deriva_L)
+            peor = max(deriva_T.max(), deriva_L.max())
+            if peor > self._techo_deriva:
+                self._techo_deriva = 10.0 ** (np.ceil(np.log10(peor)) + 1)
+                self.ax_deriva.set_ylim(1e-16, self._techo_deriva)
+                self._completo = True
+
+        if todas or vista == "fase":
+            self.trayectoria.set_data_3d(estados.T)
+            self.punto.set_data_3d(estados[-1:].T)
+            if np.abs(estados[-1]).max() > self._limite_fase:
+                factor_limite = 1.3 if self.eje == 0 else 3.2
+                self._preparar_fase_ampliada(factor_limite * np.abs(estados[-1]).max())
 
     def _preparar_fase_ampliada(self, limite):
         limite_w, techo = self._limite_w, self._techo_deriva
@@ -976,11 +1096,12 @@ class PanelActitud:
         if cambio:
             self._actualizar_fondo(self.boton_marcha.ax, self.ax_estado)
 
-    def _dibujar(self, grupos=TODAS):
-        self._dibujar_cuerpo()
-        self._actualizar_graficas()
+    def _dibujar(self, todas=False):
+        if todas or self.vista_dinamica == "cuerpo":
+            self._dibujar_cuerpo()
+        self._actualizar_graficas(todas)
         self._actualizar_textos()
-        self._refrescar(grupos)
+        self._refrescar()
 
     def _pintar_cuerpo(self, renderer):
         ax = self.ax_cuerpo
@@ -1002,17 +1123,22 @@ class PanelActitud:
             rotulo.xy = xy
             rotulo.draw(renderer)
             cajas.append(rotulo.caja(renderer.dpi))
-        self.rotulo_volteos.xy = self.fig.transFigure.transform((0.550, 0.895))
+        self.rotulo_volteos.xy = self.fig.transFigure.transform((0.668, 0.838))
         self.rotulo_volteos.draw(renderer)
         return Bbox.union(cajas)
 
-    def _pintar_graficas(self, renderer, grupos=TODAS):
+    def _pintar_graficas(self, renderer):
+        artistas, zonas = self._anim.get(self.vista_dinamica, ([], []))
+        for artista in (*artistas, self.texto_reloj):
+            artista.draw(renderer)
+        return [*zonas, self._region_reloj]
+
+    def _pintar_desplegables(self):
         regiones = []
-        for indice in grupos:
-            artistas, zonas = self._grupos_graficas[indice]
-            for artista in artistas:
-                artista.draw(renderer)
-            regiones += zonas
+        for d in self.desplegables:
+            if d.abierto:
+                self.fig.draw_artist(d.ax_lista)
+                regiones.append(d.ax_lista.bbox)
         return regiones
 
     def _actualizar_fondo(self, *ejes):
@@ -1030,13 +1156,17 @@ class PanelActitud:
         lienzo = self.fig.canvas
         self._fondo = lienzo.copy_from_bbox(self.fig.bbox)
         renderer = lienzo.get_renderer()
-        self._caja_cuerpo = self._pintar_cuerpo(renderer)
+        if self.vista_dinamica == "cuerpo":
+            self._caja_cuerpo = self._pintar_cuerpo(renderer)
+            self._volteos_en_pantalla = (self.rotulo_volteos.texto,
+                                         self.rotulo_volteos.color)
+            self._caja_volteos = self.rotulo_volteos.caja(renderer.dpi)
+        else:
+            self._caja_cuerpo = None
         self._pintar_graficas(renderer)
-        self._volteos_en_pantalla = (self.rotulo_volteos.texto,
-                                     self.rotulo_volteos.color)
-        self._caja_volteos = self.rotulo_volteos.caja(renderer.dpi)
+        self._pintar_desplegables()
 
-    def _refrescar(self, grupos=TODAS):
+    def _refrescar(self, graficas=True):
         lienzo = self.fig.canvas
         arrastrado = next((c for c, s in self.sliders.items() if s.drag_active),
                           None)
@@ -1057,21 +1187,24 @@ class PanelActitud:
             self.fig.draw_artist(caja_valor)
             regiones += [slider.ax.bbox, caja_valor.bbox]
 
-        cajares = self._pintar_cuerpo(renderer)
-        if self._camara is not None or self._caja_cuerpo is None:
-            region = self._region_cuerpo
-        else:
-            region = Bbox.intersection(Bbox.union([cajares, self._caja_cuerpo]),
-                                       self._region_cuerpo)
-        self._caja_cuerpo = cajares
-        if region is not None:
-            regiones.append(region)
-        volteos = (self.rotulo_volteos.texto, self.rotulo_volteos.color)
-        if volteos != self._volteos_en_pantalla:
-            nueva = self.rotulo_volteos.caja(renderer.dpi)
-            regiones.append(Bbox.union([nueva, self._caja_volteos]))
-            self._volteos_en_pantalla, self._caja_volteos = volteos, nueva
+        if self.vista_dinamica == "cuerpo":
+            cajares = self._pintar_cuerpo(renderer)
+            if self._camara is not None or self._caja_cuerpo is None:
+                region = self._region_cuerpo
+            else:
+                region = Bbox.intersection(Bbox.union([cajares, self._caja_cuerpo]),
+                                           self._region_cuerpo)
+            self._caja_cuerpo = cajares
+            if region is not None:
+                regiones.append(region)
+            volteos = (self.rotulo_volteos.texto, self.rotulo_volteos.color)
+            if volteos != self._volteos_en_pantalla:
+                nueva = self.rotulo_volteos.caja(renderer.dpi)
+                regiones.append(Bbox.union([nueva, self._caja_volteos]))
+                self._volteos_en_pantalla, self._caja_volteos = volteos, nueva
 
-        regiones += self._pintar_graficas(renderer, grupos)
+        if graficas:
+            regiones += self._pintar_graficas(renderer)
+        regiones += self._pintar_desplegables()
         for region in regiones:
             lienzo.blit(region)
