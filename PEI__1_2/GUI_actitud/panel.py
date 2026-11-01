@@ -878,11 +878,41 @@ class PanelActitud:
             self._regiones = obtener_todas_regiones_estabilidad()
         X, Y, regiones = self._regiones
 
+
         for esq, limite in regiones.items():
             color = COLOR_ESQUEMAS.get(esq, "#ffffff")
-            ax.contourf(X, Y, limite, levels=[0, 1.0], colors=[color], alpha=0.10)
-            ax.contour(X, Y, limite, levels=[1.0], colors=[color], linewidths=1.4)
 
+            if esq == "LF":
+                ax.plot(
+                    [0, 0], [-1, 1],
+                    color=color,
+                    linewidth=2.5,
+                    zorder=5
+                )
+                ax.plot(
+                    [0, 0], [-1, 1],
+                    linestyle="none",
+                    marker="o",
+                    markersize=5,
+                    markerfacecolor=TARJETA,
+                    markeredgecolor=color,
+                    markeredgewidth=1.5,
+                    zorder=6
+                )
+            else:
+                datos = np.ma.masked_invalid(limite)
+                ax.contourf(
+                    X, Y, datos,
+                    levels=[0, 1.0],
+                    colors=[color],
+                    alpha=0.10
+                )
+                ax.contour(
+                    X, Y, datos,
+                    levels=[1.0],
+                    colors=[color],
+                    linewidths=1.4
+                )
         ax.axhline(0, color=BORDE, linewidth=0.8)
         ax.axvline(0, color=BORDE, linewidth=0.8)
 
