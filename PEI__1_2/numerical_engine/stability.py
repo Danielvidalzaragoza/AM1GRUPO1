@@ -1,14 +1,23 @@
 import numpy as np
 
-from space_physics import estabilidad
+def estabilidad(esquema: str, z: np.ndarray) -> np.ndarray:
+    z = np.asarray(z)
+    if esquema == "EE":
+        return 1 + z
+    if esquema == "EI":
+        return 1 / (1 - z)
+    if esquema == "CN":
+        return (1 + z / 2) / (1 - z / 2)
+    if esquema == "RK4":
+        return 1 + z + z**2 / 2 + z**3 / 6 + z**4 / 24
+    if esquema == "LF":
+        # Dos raíces r = z ± sqrt(1 + z²); es estable solo si ambas tienen |r| <= 1.
+        raiz = np.sqrt(1 + z**2)
+        return np.maximum(np.abs(z + raiz), np.abs(z - raiz))
 
 def stability_report(esquema: str, eigenvalues: np.ndarray, At: float):
     z = At * np.asarray(eigenvalues)
-    if esquema == "LF":
-        roots = np.stack((z + np.sqrt(1 + z**2), z - np.sqrt(1 + z**2)))
-        maximum = np.max(np.abs(roots))
-    else:
-        maximum = np.max(np.abs(estabilidad(esquema, z)))
+    maximum = np.max(np.abs(estabilidad(esquema, z)))
     return maximum <= 1, maximum
 
 def obtener_todas_regiones_estabilidad(
