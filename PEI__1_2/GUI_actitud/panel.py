@@ -785,9 +785,22 @@ class PanelActitud:
                 & np.isfinite(N)
                 & (N > 0)
             )
+            limite_redondeo = (
+                10 * np.finfo(float).eps * N * max(np.linalg.norm(self.W0), 1.0)
+            )
+            errores_grafica = errores.copy()
+            zona_redondeo = validos & (errores <= limite_redondeo)
+            if np.any(zona_redondeo):
+                indices = np.flatnonzero(zona_redondeo)
+                inicio_meseta = indices[np.argmin(errores[indices])]
+                indices_meseta = np.flatnonzero(
+                    validos & (np.arange(len(N)) >= inicio_meseta)
+                )
+                piso_redondeo = np.median(errores[indices_meseta])
+                errores_grafica[indices_meseta] = piso_redondeo
             if np.count_nonzero(validos) >= 2:
                 x = np.log(N[validos])
-                y = np.log(errores[validos])
+                y = np.log(errores_grafica[validos])
                 ax.plot(
                     x, y, "o-",
                     color=COLOR_ESQUEMAS[esquema],
